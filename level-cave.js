@@ -1,16 +1,26 @@
 // ============================================================
-//  LEVEL: cave — "The Cave"
+//  LEVEL: cave — "The Cave"  (procedurally generated!)
 //
 //  Tile legend:  0 grass · 1 stone wall · 2 portal
 //                3 cave floor · 4 cave wall · 5 locked door
 //
-//  The sealed chamber (top-right) is now guarded by THREE
-//  DRAGONS — two evil, one good. They look identical; only the
-//  numbers they wear tell them apart. Touch the dragon wearing
-//  the correct answer and it opens the chamber. Touch an evil
-//  one and it bites: you lose a heart and get a new question.
+//  The gem chamber and the dragons stay where they are; the
+//  rock formations are different every game. The flood-fill
+//  check guarantees the gem, the dragons, and the portal home
+//  are always reachable.
 // ============================================================
 window.LEVELS = window.LEVELS || {};
+
+// The sealed gem chamber, as a stampable pattern (the 5 is its
+// locked door, opened by the good dragon):
+const CAVE_CHAMBER = [
+  [4,4,4,4,4,4,4],
+  [4,3,3,3,3,3,4],
+  [4,3,3,3,3,3,4],
+  [4,3,3,3,3,3,4],
+  [4,3,3,3,3,3,4],
+  [4,4,4,5,4,4,4],
+];
 
 LEVELS['cave'] = {
 
@@ -18,33 +28,54 @@ LEVELS['cave'] = {
 
   start: { col: 2, row: 8 },
 
-  map: [
-    [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
-    [4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3,3,3,3,4],
-    [4,3,3,4,4,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3,3,3,3,4],
-    [4,3,3,4,4,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3,3,3,3,4],
-    [4,3,3,3,3,3,3,3,3,4,4,3,3,3,3,3,3,4,3,3,3,3,3,4],
-    [4,3,3,3,3,3,3,3,3,4,4,3,3,3,3,3,3,4,4,4,5,4,4,4],
-    [4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],
-    [4,3,3,3,3,4,4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],
-    [4,2,3,3,3,4,4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],
-    [4,3,3,3,3,3,3,3,3,3,3,3,3,4,4,3,3,3,3,3,3,3,3,4],
-    [4,3,3,3,3,3,3,3,3,3,3,3,3,4,4,3,3,3,3,3,3,3,3,4],
-    [4,3,3,4,4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],
-    [4,3,3,4,4,3,3,3,3,3,3,3,3,3,3,3,3,4,4,4,3,3,3,4],
-    [4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],
-    [4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4],
-    [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
-  ],
+  generate: function () {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const map = Gen.blank(24, 16, 3, 4);
 
-  // The gem waits inside the sealed chamber (top-right).
+      // The chamber goes in the top-right, the portal on the
+      // left wall — fixed, to match the coordinates below.
+      Gen.stamp(map, 17, 0, CAVE_CHAMBER);
+      map[8][1] = 2; // the portal home
+
+      // Keep the spawn, the dragons' spots, and the chamber
+      // doorstep free of random rocks.
+      const keep = [[2, 8], [3, 8], [15, 8], [18, 8], [21, 8], [20, 6], [20, 7]];
+      Gen.protect(map, keep);
+
+      // 7–10 random rock formations of various shapes.
+      const blobs = [
+        [[4]],
+        [[4, 4]],
+        [[4], [4]],
+        [[4, 4], [4, 4]],
+      ];
+      const blobCount = Gen.randInt(7, 10);
+      for (let i = 0; i < blobCount; i++) {
+        Gen.placeRandomly(map, blobs[Gen.randInt(0, blobs.length - 1)], 3);
+      }
+
+      Gen.unprotect(map, keep, 3);
+
+      // Safety inspection: gem, portal, and all three dragons
+      // must be reachable from the spawn.
+      if (Gen.allReachable(map, [3, 2, 5], [2, 8],
+          [[20, 2], [1, 8], [15, 8], [18, 8], [21, 8]])) {
+        return map;
+      }
+    }
+    // Emergency fallback: a plain cave with just the chamber.
+    const map = Gen.blank(24, 16, 3, 4);
+    Gen.stamp(map, 17, 0, CAVE_CHAMBER);
+    map[8][1] = 2;
+    return map;
+  },
+
+  // The gem waits inside the sealed chamber.
   items: [
     { id: 'gem', name: 'Cave Gem', texture: 'item-gem', col: 20, row: 2 },
   ],
 
-  // The dragon guardians: where the three stand, how hard the
-  // math is, and which tile opens when the good one is found
-  // (the chamber door at column 20, row 5 becomes cave floor).
+  // The dragon guardians (two evil, one good — the math knows).
   dragons: {
     positions: [
       { col: 15, row: 8 },
