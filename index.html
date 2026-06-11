@@ -25,7 +25,6 @@
     flex: 1 1 auto;
     width: 100%;
     min-height: 0;
-    max-width: 960px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -103,11 +102,11 @@ const config = {
   parent: 'game',
   pixelArt: true,
   physics: { default: 'arcade' },
-  // The scale manager shrinks/grows the game to fit the screen
-  // while keeping its shape — this is what makes phones work.
+  // We size the game ourselves (see refit() below) so it can
+  // truly FILL the screen in any orientation, instead of being
+  // letterboxed into a fixed shape.
   scale: {
-    mode: Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH,
+    mode: Phaser.Scale.NONE,
     width: 800,
     height: 576,
   },
@@ -116,14 +115,34 @@ const config = {
 
 const game = new Phaser.Game(config);
 
-// Phones report their new screen size a moment AFTER rotating,
-// so re-measure a couple of times once things have settled.
+// ============================================================
+//  FILL THE SCREEN — the canvas takes the whole game area, and
+//  a zoom factor is chosen so the camera's view never shows
+//  more than the current map: big screens get big chunky
+//  pixels, small screens zoom out a little. No empty bars.
+// ============================================================
+let mapPixelW = 960, mapPixelH = 640; // updated by loadLevel
+
 function refit() {
-  setTimeout(() => game.scale.refresh(), 100);
-  setTimeout(() => game.scale.refresh(), 500);
+  const rect = document.getElementById('game').getBoundingClientRect();
+  if (rect.width < 50 || rect.height < 50) return;
+
+  // The smallest zoom at which the view still fits inside the map
+  const z = Phaser.Math.Clamp(
+    Math.max(rect.width / mapPixelW, rect.height / mapPixelH), 0.6, 8);
+
+  game.scale.setZoom(z);
+  game.scale.resize(Math.round(rect.width / z), Math.round(rect.height / z));
 }
-window.addEventListener('resize', refit);
-window.addEventListener('orientationchange', refit);
+
+// Phones report their new size a moment AFTER rotating, so we
+// re-measure a couple of times once things have settled.
+function refitSoon() {
+  setTimeout(refit, 100);
+  setTimeout(refit, 500);
+}
+window.addEventListener('resize', refitSoon);
+window.addEventListener('orientationchange', refitSoon);
 
 let player, keys;
 let layer = null, collider = null;
@@ -327,6 +346,12 @@ function create() {
 
   updateInventoryLabel();
   updateHealthLabel();
+
+  // Whenever the screen size changes, re-anchor the HUD and
+  // D-pad to the new edges.
+  this.scale.on('resize', () => layoutUI(this));
+  layoutUI(this);
+
   loadLevel(this, STARTING_LEVEL, LEVELS[STARTING_LEVEL].start);
 }
 
@@ -595,6 +620,11 @@ function loadLevel(scene, name, spawn) {
   scene.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
   scene.physics.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 
+  // Tell the screen-filler how big this map is, and refit.
+  mapPixelW = map.widthInPixels;
+  mapPixelH = map.heightInPixels;
+  refit();
+
   levelLabel.setText(level.name);
   scene.cameras.main.fadeIn(350);
 
@@ -766,9 +796,38 @@ function createTouchControls(scene) {
     { dir: 'right', x: cx + gap, y: cy,       angle: 90 },
   ];
   buttons.forEach(b => {
-    scene.add.image(b.x, b.y, 'dpad-btn')
+    b.img = scene.add.image(b.x, b.y, 'dpad-btn')
       .setScrollFactor(0).setDepth(20).setAngle(b.angle);
+    b.r = 42; // finger hit radius
     touchButtons.push(b);
+  });
+  layoutUI(scene); // snap the pad to the current screen size
+}
+
+// ============================================================
+//  LAYOUT — anchor the HUD and D-pad to the actual screen
+//  edges (the screen size changes per device and orientation).
+// ============================================================
+function layoutUI(scene) {
+  if (!levelLabel) return;
+  const w = scene.scale.width, h = scene.scale.height;
+
+  levelLabel.setPosition(12, 10);
+  healthLabel.setPosition(12, 42);
+  inventoryLabel.setPosition(w - 12, 10);
+  messageText.setPosition(w / 2, h - 36);
+
+  // The D-pad shrinks a little on narrow screens
+  const s = Phaser.Math.Clamp(Math.min(w, h) / 430, 0.7, 1.15);
+  const cx = 96 * s, cy = h - 96 * s, gap = 58 * s;
+  const spots = {
+    up: [cx, cy - gap], down: [cx, cy + gap],
+    left: [cx - gap, cy], right: [cx + gap, cy],
+  };
+  touchButtons.forEach(b => {
+    const [x, y] = spots[b.dir];
+    b.x = x; b.y = y; b.r = 42 * s;
+    b.img.setPosition(x, y).setScale(s);
   });
 }
 
@@ -782,7 +841,7 @@ function updateTouchState(scene) {
   for (const p of pointers) {
     if (!p || !p.isDown) continue;
     for (const b of touchButtons) {
-      if (Phaser.Math.Distance.Between(p.x, p.y, b.x, b.y) < 42) {
+      if (Phaser.Math.Distance.Between(p.x, p.y, b.x, b.y) < b.r) {
         touch[b.dir] = true;
       }
     }
