@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>My Top-Down Game — Step 4: The Math Doors</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #1a1d23;
+    font-family: -apple-system, Helvetica, Arial, sans-serif;
+    color: #9aa3b2;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  /* The game area grows to fill the screen; Phaser fits the
+     canvas inside it while keeping the aspect ratio. */
+  #game {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    max-width: 960px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #hint {
+    margin: 6px 0 10px;
+    font-size: 13px;
+    text-align: center;
+    padding: 0 10px;
+  }
+  canvas {
+    border-radius: 8px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    touch-action: none; /* fingers control the game, not page scrolling */
+  }
+</style>
+
+<!-- The Phaser game engine (needs internet the first time) -->
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+
+<!-- Your levels — one file per map, all in the SAME FOLDER -->
+<script src="level-home.js"></script>
+<script src="level-cave.js"></script>
+
+</head>
+<body>
+
+<div id="game"></div>
+<div id="hint">Arrows / WASD (or the on-screen pad) — solve the doors for the key, then face the dragons!</div>
+
+<script>
+// ============================================================
+//  TILE LEGEND (used by every level file)
+//    0 = grass        (walkable)
+//    1 = stone wall   (blocks)
+//    2 = portal       (walkable — teleports, see "exits")
+//    3 = cave floor   (walkable)
+//    4 = cave wall    (blocks)
+//    5 = locked door  (blocks — opened by items OR by quizzes)
+//    6 = house wall   (blocks — decoration)
+//    7 = roof         (blocks — decoration)
+//    8 = window       (blocks — decoration)
+//    9 = house door   (blocks — decoration, unlike tile 5!)
+//   10 = tree         (blocks — decoration)
+// ============================================================
+const TILE = 32;
+const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10];
+const STARTING_LEVEL = 'home';
+
+const MAX_HEALTH = 3;
+const state = {
+  inventory: [],
+  health: MAX_HEALTH,
+};
+
+// ------------------------------------------------------------
+// If anything crashes, say so on the page instead of silently
+// freezing. (A crashed game stops its update loop, which looks
+// exactly like a freeze.)
+// ------------------------------------------------------------
+window.addEventListener('error', (e) => {
+  const hint = document.getElementById('hint');
+  hint.style.color = '#ff8a8a';
+  hint.textContent = '⚠️ Game error: ' + e.message + (e.lineno ? ' (line ' + e.lineno + ')' : '');
+});
+
+if (!window.LEVELS || !window.LEVELS[STARTING_LEVEL]) {
+  document.getElementById('hint').textContent =
+    '⚠️ Level files not found. Put level-home.js and level-cave.js in the same folder as this file.';
+  throw new Error('Missing level files');
+}
+
+const config = {
+  type: Phaser.AUTO,
+  parent: 'game',
+  pixelArt: true,
+  physics: { default: 'arcade' },
+  // The scale manager shrinks/grows the game to fit the screen
+  // while keeping its shape — this is what makes phones work.
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: 800,
+    height: 576,
+  },
+  scene: { create, update },
+};
+
+new Phaser.Game(config);
+
+let player, keys;
+let layer = null, collider = null;
+let currentLevelName = null;
+let levelLabel, inventoryLabel, messageText, healthLabel;
+let itemSprites = [];
+// The tile the player was on last frame. Exits fire only when
+// ENTERING a tile, so spawning on or near one can't re-trigger.
+let prevTileKey = '';
+
+// Dragon guardians
+let dragonSprites = [];
+let dragonLabels = [];
+let dragonQuestionText = null;
+let dragonHurtUntil = 0; // brief safety period after a bite
+// While knocked back by a bite, the keys are ignored briefly
+let knockback = { until: 0, vx: 0, vy: 0 };
+
+// Touch D-pad (created only on touch devices)
+const touch = { up: false, down: false, left: false, right: false };
+let touchButtons = [];
+
+// Quiz display objects (rebuilt whenever a level loads)
+let quizQuestionText = null;
+let quizDoorLabels = [];
+// After a wrong answer, the player must stop pushing on the
+// doors for a moment before the next attempt counts (prevents
+// accidental instant re-triggers).
+let quizNeedsRetreat = false;
+let quizLastContact = 0;   // when we last bumped a quiz door
+let lastLockedMsg = 0;     // throttles the "it's locked" message
+
+// ============================================================
+//  CREATE — runs once at startup
+// ============================================================
+function create() {
+
+  // --- Draw the 6 tiles in code ---
+  const tc = this.textures.createCanvas('tiles', TILE * 11, TILE);
+  const ctx = tc.context;
+
+  // Tile 0: grass
+  ctx.fillStyle = '#5d9c59'; ctx.fillRect(0, 0, TILE, TILE);
+  ctx.fillStyle = '#4e8b4a';
+  for (let i = 0; i < 10; i++)
+    ctx.fillRect(Math.floor(Math.random() * 28), Math.floor(Math.random() * 28), 3, 3);
+
+  // Tile 1: stone wall
+  ctx.fillStyle = '#5b6470'; ctx.fillRect(TILE, 0, TILE, TILE);
+  ctx.fillStyle = '#6e7886'; ctx.fillRect(TILE + 3, 3, TILE - 6, TILE - 6);
+  ctx.fillStyle = '#49515b'; ctx.fillRect(TILE + 3, TILE - 8, TILE - 6, 5);
+
+  // Tile 2: portal
+  ctx.fillStyle = '#241b3d'; ctx.fillRect(TILE * 2, 0, TILE, TILE);
+  ctx.strokeStyle = '#b08ae8'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(TILE * 2 + 16, 16, 9, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#e6d6ff';
+  ctx.beginPath(); ctx.arc(TILE * 2 + 16, 16, 3, 0, Math.PI * 2); ctx.fill();
+
+  // Tile 3: cave floor
+  ctx.fillStyle = '#4a4036'; ctx.fillRect(TILE * 3, 0, TILE, TILE);
+  ctx.fillStyle = '#3e362d';
+  for (let i = 0; i < 8; i++)
+    ctx.fillRect(TILE * 3 + Math.floor(Math.random() * 28), Math.floor(Math.random() * 28), 3, 3);
+
+  // Tile 4: cave wall
+  ctx.fillStyle = '#2c3038'; ctx.fillRect(TILE * 4, 0, TILE, TILE);
+  ctx.fillStyle = '#3a3f48'; ctx.fillRect(TILE * 4 + 3, 3, TILE - 6, TILE - 6);
+  ctx.fillStyle = '#22262c'; ctx.fillRect(TILE * 4 + 3, TILE - 8, TILE - 6, 5);
+
+  // Tile 5: locked door
+  ctx.fillStyle = '#7a4f26'; ctx.fillRect(TILE * 5, 0, TILE, TILE);
+  ctx.fillStyle = '#8e5f30';
+  ctx.fillRect(TILE * 5 + 3, 2, 7, 28); ctx.fillRect(TILE * 5 + 13, 2, 7, 28); ctx.fillRect(TILE * 5 + 23, 2, 7, 28);
+  ctx.fillStyle = '#2b1d0e';
+  ctx.beginPath(); ctx.arc(TILE * 5 + 16, 14, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.fillRect(TILE * 5 + 15, 14, 2, 7);
+
+  // Tile 6: house wall — cream plaster with timber beams
+  let o = TILE * 6;
+  ctx.fillStyle = '#ecdcb4'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#8a6b48';
+  ctx.fillRect(o, 0, TILE, 3);             // top beam
+  ctx.fillRect(o, TILE - 3, TILE, 3);      // bottom beam
+  ctx.fillRect(o, 0, 3, TILE);             // left beam
+  ctx.fillRect(o + TILE - 3, 0, 3, TILE);  // right beam
+
+  // Tile 7: roof — red shingles with a sunlit ridge
+  o = TILE * 7;
+  ctx.fillStyle = '#b5523c'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#9c4431';
+  for (let y = 7; y < TILE; y += 8) ctx.fillRect(o, y, TILE, 2);
+  ctx.fillStyle = '#c96450'; ctx.fillRect(o, 0, TILE, 3);
+
+  // Tile 8: window — house wall with a glass window
+  o = TILE * 8;
+  ctx.fillStyle = '#ecdcb4'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#8a6b48'; ctx.fillRect(o, TILE - 3, TILE, 3);
+  ctx.fillStyle = '#6b5236'; ctx.fillRect(o + 7, 6, 18, 16);   // frame
+  ctx.fillStyle = '#a7d3ee'; ctx.fillRect(o + 9, 8, 14, 12);   // glass
+  ctx.fillStyle = '#6b5236';
+  ctx.fillRect(o + 15, 8, 2, 12); ctx.fillRect(o + 9, 13, 14, 2); // crossbars
+
+  // Tile 9: house door — a friendly arched door. Decoration
+  // only! The LOCKED gameplay door is still tile 5.
+  o = TILE * 9;
+  ctx.fillStyle = '#ecdcb4'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#7a5230';
+  ctx.fillRect(o + 9, 12, 14, 20);
+  ctx.beginPath(); ctx.arc(o + 16, 13, 7, Math.PI, 0); ctx.fill(); // arch
+  ctx.fillStyle = '#9c7048'; ctx.fillRect(o + 15, 10, 2, 22);      // plank line
+  ctx.fillStyle = '#e8c860';
+  ctx.beginPath(); ctx.arc(o + 20, 22, 2, 0, Math.PI * 2); ctx.fill(); // handle
+
+  // Tile 10: tree — leafy canopy over grass
+  o = TILE * 10;
+  ctx.fillStyle = '#5d9c59'; ctx.fillRect(o, 0, TILE, TILE);   // grass behind
+  ctx.fillStyle = '#6b4a2f'; ctx.fillRect(o + 13, 20, 6, 11);  // trunk
+  ctx.fillStyle = '#3e7d3a';
+  ctx.beginPath(); ctx.arc(o + 16, 13, 12, 0, Math.PI * 2); ctx.fill(); // canopy
+  ctx.fillStyle = '#4f9447';
+  ctx.beginPath(); ctx.arc(o + 12, 10, 6, 0, Math.PI * 2); ctx.fill();  // light spots
+  ctx.beginPath(); ctx.arc(o + 20, 15, 5, 0, Math.PI * 2); ctx.fill();
+
+  tc.refresh();
+
+  // --- Draw the player ---
+  let g = this.add.graphics();
+  g.fillStyle(0x3568b8); g.fillRoundedRect(4, 10, 16, 13, 4);
+  g.fillStyle(0xf2c9a1); g.fillCircle(12, 8, 6);
+  g.fillStyle(0x222222); g.fillRect(9, 6, 2, 3); g.fillRect(13, 6, 2, 3);
+  g.generateTexture('player', 24, 24);
+  g.destroy();
+
+  // --- Draw the item pickups ---
+  g = this.add.graphics();
+  g.fillStyle(0xf5c542);
+  g.fillCircle(7, 8, 5);
+  g.fillStyle(0x1a1d23); g.fillCircle(7, 8, 2);
+  g.fillStyle(0xf5c542);
+  g.fillRect(10, 7, 10, 3);
+  g.fillRect(16, 10, 2, 4); g.fillRect(19, 10, 2, 5);
+  g.generateTexture('item-key', 22, 16);
+  g.clear();
+  g.fillStyle(0x46d6c9);
+  g.fillTriangle(10, 2, 19, 9, 10, 9);
+  g.fillTriangle(10, 2, 1, 9, 10, 9);
+  g.fillStyle(0x2fa89d);
+  g.fillTriangle(1, 9, 19, 9, 10, 18);
+  g.generateTexture('item-gem', 20, 20);
+  g.destroy();
+
+  // --- Draw the dragon (all three look identical on purpose —
+  //     only the numbers tell them apart!) ---
+  g = this.add.graphics();
+  g.fillStyle(0x6a4fa3);                                   // wings
+  g.fillTriangle(2, 14, 12, 4, 14, 16);
+  g.fillTriangle(30, 14, 20, 4, 18, 16);
+  g.fillStyle(0x8e5cc7); g.fillRoundedRect(8, 8, 16, 16, 5); // body
+  g.fillStyle(0xb08ae8); g.fillRoundedRect(12, 14, 8, 9, 3); // belly
+  g.fillStyle(0x8e5cc7); g.fillCircle(16, 7, 6);             // head
+  g.fillStyle(0xffffff); g.fillCircle(13, 6, 2); g.fillCircle(19, 6, 2);
+  g.fillStyle(0x222222); g.fillRect(12, 5, 2, 2); g.fillRect(18, 5, 2, 2);
+  g.generateTexture('dragon', 32, 28);
+  g.destroy();
+
+  player = this.physics.add.sprite(0, 0, 'player');
+  player.body.setSize(18, 18);
+  player.setDepth(1);
+
+  // --- HUD text ---
+  levelLabel = this.add.text(12, 10, '', {
+    fontFamily: 'Helvetica, Arial', fontSize: '16px',
+    color: '#ffffff', backgroundColor: '#00000088', padding: { x: 8, y: 4 },
+  }).setScrollFactor(0).setDepth(10);
+
+  healthLabel = this.add.text(12, 42, '', {
+    fontFamily: 'Helvetica, Arial', fontSize: '18px',
+    color: '#ff6b6b', backgroundColor: '#00000088', padding: { x: 8, y: 2 },
+  }).setScrollFactor(0).setDepth(10);
+
+  inventoryLabel = this.add.text(788, 10, '', {
+    fontFamily: 'Helvetica, Arial', fontSize: '14px',
+    color: '#ffe9a8', backgroundColor: '#00000088', padding: { x: 8, y: 4 },
+  }).setScrollFactor(0).setDepth(10).setOrigin(1, 0);
+
+  messageText = this.add.text(400, 540, '', {
+    fontFamily: 'Helvetica, Arial', fontSize: '16px',
+    color: '#ffffff', backgroundColor: '#000000aa', padding: { x: 12, y: 6 },
+  }).setScrollFactor(0).setDepth(10).setOrigin(0.5).setAlpha(0);
+
+  keys = this.input.keyboard.addKeys({
+    up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT',
+    w: 'W', a: 'A', s: 'S', d: 'D',
+  });
+
+  // On phones and tablets, show the on-screen D-pad
+  if (this.sys.game.device.input.touch) createTouchControls(this);
+
+  this.cameras.main.startFollow(player, true, 0.12, 0.12);
+
+  updateInventoryLabel();
+  updateHealthLabel();
+  loadLevel(this, STARTING_LEVEL, LEVELS[STARTING_LEVEL].start);
+}
+
+// ============================================================
+//  WORLD GENERATOR TOOLKIT (used by the level files)
+//  A level can provide a generate() function that builds its
+//  map with these helpers — a brand-new world every game!
+// ============================================================
+const Gen = {
+
+  // A width×height map filled with floor and ringed by wall.
+  blank(width, height, floor, wall) {
+    const map = [];
+    for (let r = 0; r < height; r++) {
+      const row = [];
+      for (let c = 0; c < width; c++) {
+        row.push((r === 0 || r === height - 1 || c === 0 || c === width - 1) ? wall : floor);
+      }
+      map.push(row);
+    }
+    return map;
+  },
+
+  // Copy a small pattern of tiles into the map at (col, row).
+  stamp(map, col, row, pattern) {
+    pattern.forEach((prow, dr) => prow.forEach((tile, dc) => {
+      map[row + dr][col + dc] = tile;
+    }));
+  },
+
+  randInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  },
+
+  // Is this rectangle — PLUS a one-tile margin all around — pure
+  // floor? The margin is the secret to safe random placement:
+  // it forces a walkable gap around everything placed, so the
+  // decoration can never wall off a passage.
+  isClear(map, col, row, w, h, floor) {
+    for (let r = row - 1; r <= row + h; r++) {
+      for (let c = col - 1; c <= col + w; c++) {
+        if (r < 0 || c < 0 || r >= map.length || c >= map[0].length) return false;
+        if (map[r][c] !== floor) return false;
+      }
+    }
+    return true;
+  },
+
+  // Stamp a pattern at a random clear spot (gives up after 40 tries).
+  placeRandomly(map, pattern, floor) {
+    const h = pattern.length, w = pattern[0].length;
+    for (let t = 0; t < 40; t++) {
+      const col = Gen.randInt(1, map[0].length - 1 - w);
+      const row = Gen.randInt(1, map.length - 1 - h);
+      if (Gen.isClear(map, col, row, w, h, floor)) {
+        Gen.stamp(map, col, row, pattern);
+        return true;
+      }
+    }
+    return false;
+  },
+
+  // Sprinkle `count` single tiles onto random clear floor cells.
+  scatter(map, tile, count, floor) {
+    for (let i = 0; i < count; i++) Gen.placeRandomly(map, [[tile]], floor);
+  },
+
+  // Temporarily mark cells so nothing random can land on or
+  // right next to them; release them again afterwards.
+  protect(map, cells) { cells.forEach(([c, r]) => { map[r][c] = -9; }); },
+  unprotect(map, cells, floor) {
+    cells.forEach(([c, r]) => { if (map[r][c] === -9) map[r][c] = floor; });
+  },
+
+  // The safety inspector: starting at `from`, walk (flood-fill)
+  // through every walkable tile. Returns true only if EVERY
+  // target was reached. Closed doors count as walkable here,
+  // because the player can open them.
+  allReachable(map, walkables, from, targets) {
+    const w = map[0].length, h = map.length;
+    const seen = new Set([from.join(',')]);
+    const queue = [from];
+    while (queue.length > 0) {
+      const [c, r] = queue.shift();
+      for (const [nc, nr] of [[c + 1, r], [c - 1, r], [c, r + 1], [c, r - 1]]) {
+        if (nc < 0 || nr < 0 || nc >= w || nr >= h) continue;
+        if (seen.has(nc + ',' + nr)) continue;
+        if (!walkables.includes(map[nr][nc])) continue;
+        seen.add(nc + ',' + nr);
+        queue.push([nc, nr]);
+      }
+    }
+    return targets.every(([c, r]) => seen.has(c + ',' + r));
+  },
+};
+
+// ============================================================
+//  THE PROCEDURAL QUIZ
+//  newQuestion() invents a multiplication and three answers.
+//  This is the "procedural" part: questions are produced by
+//  an algorithm at play time, not typed into a level file.
+// ============================================================
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function newQuestion(quiz) {
+  quiz.a = randInt(quiz.min, quiz.max);
+  quiz.b = randInt(quiz.min, quiz.max);
+  const correct = quiz.a * quiz.b;
+
+  // Wrong answers that LOOK plausible — the mistakes kids
+  // really make: off-by-one-row answers like (a±1)×b, a×(b±1).
+  const candidates = [
+    (quiz.a + 1) * quiz.b, (quiz.a - 1) * quiz.b,
+    quiz.a * (quiz.b + 1), quiz.a * (quiz.b - 1),
+    correct + 1, correct - 1,
+  ].filter(n => n > 0 && n !== correct);
+
+  // Pick 2 distinct wrong answers at random
+  const wrongs = [];
+  while (wrongs.length < 2) {
+    const pick = candidates[randInt(0, candidates.length - 1)];
+    if (!wrongs.includes(pick)) wrongs.push(pick);
+  }
+
+  // Shuffle the three answers onto the three doors
+  const answers = [correct, wrongs[0], wrongs[1]];
+  for (let i = answers.length - 1; i > 0; i--) {
+    const j = randInt(0, i);
+    [answers[i], answers[j]] = [answers[j], answers[i]];
+  }
+  quiz.answers = answers;
+  quiz.correctIndex = answers.indexOf(correct);
+}
+
+// Build (or rebuild) the floating question + door labels
+function setupQuizDisplay(scene, quiz) {
+  const cx = (quiz.doors.reduce((s, d) => s + d.col, 0) / quiz.doors.length) * TILE + TILE / 2;
+  const top = Math.min(...quiz.doors.map(d => d.row)) * TILE;
+
+  quizQuestionText = scene.add.text(cx, top - 24, '', {
+    fontFamily: 'Helvetica, Arial', fontSize: '18px', fontStyle: 'bold',
+    color: '#ffffff', backgroundColor: '#000000aa', padding: { x: 10, y: 4 },
+  }).setOrigin(0.5).setDepth(2);
+
+  quizDoorLabels = quiz.doors.map(d =>
+    scene.add.text(d.col * TILE + TILE / 2, d.row * TILE + TILE / 2, '', {
+      fontFamily: 'Helvetica, Arial', fontSize: '15px', fontStyle: 'bold',
+      color: '#ffe9a8', backgroundColor: '#00000099', padding: { x: 4, y: 1 },
+    }).setOrigin(0.5).setDepth(2)
+  );
+
+  refreshQuizDisplay(quiz);
+}
+
+function refreshQuizDisplay(quiz) {
+  quizQuestionText.setText(`${quiz.a} × ${quiz.b} = ?`);
+  quiz.doors.forEach((d, i) => quizDoorLabels[i].setText(String(quiz.answers[i])));
+}
+
+// ============================================================
+//  LOAD LEVEL
+// ============================================================
+function loadLevel(scene, name, spawn) {
+  const level = LEVELS[name];
+
+  // The level's file might be missing from the folder — say so
+  // clearly instead of crashing. (This exact bug happened once!)
+  if (!level) {
+    showMessage(scene, `⚠️ Level "${name}" not found — is its <script> file in the folder?`);
+    return;
+  }
+
+  // A level can describe HOW to build itself instead of shipping
+  // a fixed map. We build it once per game, then keep it (so an
+  // opened door stays open). Refresh the page for a new world!
+  if (!level.map && level.generate) level.map = level.generate();
+
+  currentLevelName = name;
+
+  if (layer) layer.destroy();
+  if (collider) collider.destroy();
+  itemSprites.forEach(s => s.destroy());
+  itemSprites = [];
+  if (quizQuestionText) { quizQuestionText.destroy(); quizQuestionText = null; }
+  quizDoorLabels.forEach(t => t.destroy());
+  quizDoorLabels = [];
+  dragonSprites.forEach(s => s.destroy());
+  dragonSprites = [];
+  dragonLabels.forEach(t => t.destroy());
+  dragonLabels = [];
+  if (dragonQuestionText) { dragonQuestionText.destroy(); dragonQuestionText = null; }
+  knockback.until = 0;
+
+  const map = scene.make.tilemap({ data: level.map, tileWidth: TILE, tileHeight: TILE });
+  const tileset = map.addTilesetImage('tiles');
+  layer = map.createLayer(0, tileset, 0, 0);
+  layer.setCollision(WALL_TILES);
+  // The third argument is a callback: the physics engine calls
+  // it with the EXACT tile the player is bumping into. This is
+  // how doors react to being walked into, not walked past.
+  collider = scene.physics.add.collider(player, layer, (pl, tile) => {
+    handleDoorBump(scene, tile);
+  });
+
+  // Items (skipping already-collected ones)
+  (level.items || []).forEach(item => {
+    if (item.collected) return;
+    const sprite = scene.physics.add.sprite(
+      item.col * TILE + TILE / 2, item.row * TILE + TILE / 2, item.texture
+    );
+    sprite.setDepth(1);
+    scene.tweens.add({ targets: sprite, y: sprite.y - 4, duration: 700, yoyo: true, repeat: -1 });
+    scene.physics.add.overlap(player, sprite, () => {
+      item.collected = true;
+      state.inventory.push(item.id);
+      sprite.destroy();
+      updateInventoryLabel();
+      showMessage(scene, `You picked up the ${item.name}!`);
+    });
+    itemSprites.push(sprite);
+  });
+
+  // Quiz doors, if this level has an unsolved quiz
+  if (level.quiz && !level.quiz.solved) {
+    if (!level.quiz.answers) newQuestion(level.quiz);
+    setupQuizDisplay(scene, level.quiz);
+    quizNeedsRetreat = false;
+  }
+
+  // Dragon guardians, if this level has them and they're unsolved
+  if (level.dragons && !level.dragons.solved) {
+    const dragons = level.dragons;
+    if (!dragons.answers) newQuestion(dragons);
+
+    // The floating question, above the middle of the group
+    const cx = (dragons.positions.reduce((s, d) => s + d.col, 0) / dragons.positions.length) * TILE + TILE / 2;
+    const top = Math.min(...dragons.positions.map(d => d.row)) * TILE;
+    dragonQuestionText = scene.add.text(cx, top - 52, '', {
+      fontFamily: 'Helvetica, Arial', fontSize: '18px', fontStyle: 'bold',
+      color: '#ffffff', backgroundColor: '#000000aa', padding: { x: 10, y: 4 },
+    }).setOrigin(0.5).setDepth(2);
+
+    dragons.positions.forEach((d, i) => {
+      const sprite = scene.physics.add.sprite(
+        d.col * TILE + TILE / 2, d.row * TILE + TILE / 2, 'dragon'
+      );
+      sprite.setDepth(1);
+      scene.tweens.add({ targets: sprite, y: sprite.y - 5, duration: 900 + i * 120, yoyo: true, repeat: -1 });
+
+      const label = scene.add.text(d.col * TILE + TILE / 2, d.row * TILE - 22, '', {
+        fontFamily: 'Helvetica, Arial', fontSize: '15px', fontStyle: 'bold',
+        color: '#ffe9a8', backgroundColor: '#00000099', padding: { x: 5, y: 1 },
+      }).setOrigin(0.5).setDepth(2);
+
+      scene.physics.add.overlap(player, sprite, () => handleDragonTouch(scene, level, i, sprite));
+      dragonSprites.push(sprite);
+      dragonLabels.push(label);
+    });
+
+    refreshDragonDisplay(dragons);
+  }
+
+  player.setPosition(spawn.col * TILE + TILE / 2, spawn.row * TILE + TILE / 2);
+  scene.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
+  scene.physics.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
+
+  levelLabel.setText(level.name);
+  scene.cameras.main.fadeIn(350);
+
+  // Remember the tile we spawned on, so an exit can never fire
+  // until the player has actually walked onto it.
+  prevTileKey = `${spawn.col},${spawn.row}`;
+}
+
+// ============================================================
+//  Door helpers — changing the world
+// ============================================================
+function openTile(scene, level, col, row, becomes) {
+  layer.putTileAt(becomes, col, row);   // change what you see
+  level.map[row][col] = becomes;        // change the data itself
+}
+
+// ============================================================
+//  DOOR BUMP — called by the physics engine every time the
+//  player collides with a solid tile. We only care about door
+//  tiles (5). tile.x / tile.y are the column / row.
+// ============================================================
+function handleDoorBump(scene, tile) {
+  if (tile.index !== 5) return;
+
+  const level = LEVELS[currentLevelName];
+  const key = `${tile.x},${tile.y}`;
+
+  // --- Is it an item-locked door? ---
+  const door = level.doors && level.doors[key];
+  if (door) {
+    if (state.inventory.includes(door.needs)) {
+      openTile(scene, level, tile.x, tile.y, door.becomes);
+      delete level.doors[key];
+      showMessage(scene, door.message || 'The door unlocks!');
+    } else if (scene.time.now - lastLockedMsg > 2000) {
+      // Pushing on a door we can't open yet — give a hint,
+      // but at most once every 2 seconds.
+      lastLockedMsg = scene.time.now;
+      showMessage(scene, "It's locked tight. There must be a key somewhere...");
+    }
+    return;
+  }
+
+  // --- Is it one of the quiz doors? ---
+  const quiz = level.quiz;
+  if (!quiz || quiz.solved) return;
+  const idx = quiz.doors.findIndex(d => d.col === tile.x && d.row === tile.y);
+  if (idx === -1) return;
+
+  quizLastContact = scene.time.now;
+  if (quizNeedsRetreat) return; // still leaning on the doors after a miss
+
+  if (idx === quiz.correctIndex) {
+    // Right answer! Open that one door, the quiz is done.
+    openTile(scene, level, tile.x, tile.y, quiz.becomes);
+    quiz.solved = true;
+    showMessage(scene, `Correct! ${quiz.a} × ${quiz.b} = ${quiz.a * quiz.b}`);
+    quizQuestionText.setText(`✔ ${quiz.a} × ${quiz.b} = ${quiz.a * quiz.b}`);
+    quizDoorLabels[idx].destroy();
+  } else {
+    // Wrong door: invent a NEW question (procedural!),
+    // relabel the doors, and wait for the player to back off.
+    showMessage(scene, `${quiz.answers[idx]}? Not quite... here's a new one!`);
+    newQuestion(quiz);
+    refreshQuizDisplay(quiz);
+    quizNeedsRetreat = true;
+    scene.cameras.main.shake(150, 0.004); // a little "nope" wobble
+  }
+}
+
+// ============================================================
+//  DRAGONS — touch the GOOD dragon (right answer) to open the
+//  way; touch an evil one and it bites: lose a heart, get
+//  knocked back, and face a brand-new question.
+// ============================================================
+function refreshDragonDisplay(dragons) {
+  dragonQuestionText.setText(`${dragons.a} × ${dragons.b} = ?`);
+  dragons.positions.forEach((d, i) => dragonLabels[i].setText(String(dragons.answers[i])));
+}
+
+function handleDragonTouch(scene, level, i, sprite) {
+  const dragons = level.dragons;
+  if (dragons.solved) return;
+  if (scene.time.now < dragonHurtUntil) return; // just bitten — safe for a moment
+
+  if (i === dragons.correctIndex) {
+    // The GOOD dragon! It opens the way.
+    dragons.solved = true;
+    const o = dragons.opens;
+    openTile(scene, level, o.col, o.row, o.becomes);
+    showMessage(scene, dragons.message || 'The good dragon bows — the way is open!');
+    dragonQuestionText.setText(`✔ ${dragons.a} × ${dragons.b} = ${dragons.a * dragons.b}`);
+    sprite.setTint(0x9effa0); // it glows a friendly green
+    dragonLabels[i].destroy();
+    // ...and the evil dragons fly away
+    dragonSprites.forEach((s, j) => {
+      if (j === i) return;
+      scene.tweens.add({
+        targets: [s, dragonLabels[j]], y: '-=60', alpha: 0, duration: 700,
+        onComplete: () => { s.destroy(); dragonLabels[j].destroy(); },
+      });
+    });
+  } else {
+    // An EVIL dragon! Chomp.
+    sprite.setTint(0xff5555);
+    scene.time.delayedCall(500, () => { if (sprite.active) sprite.clearTint(); });
+
+    // Knock the player back, away from the dragon
+    const dx = player.x - sprite.x, dy = player.y - sprite.y;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    knockback = { until: scene.time.now + 220, vx: (dx / len) * 350, vy: (dy / len) * 350 };
+    dragonHurtUntil = scene.time.now + 1200;
+
+    // New question, new labels (procedural!)
+    newQuestion(dragons);
+    refreshDragonDisplay(dragons);
+
+    loseHealth(scene, 'The dragon bites!');
+  }
+}
+
+function loseHealth(scene, why) {
+  state.health -= 1;
+  updateHealthLabel();
+  scene.cameras.main.shake(180, 0.006);
+  player.setTint(0xff7777);
+  scene.time.delayedCall(600, () => player.clearTint());
+
+  if (state.health <= 0) {
+    // Fainted! Wake up at this level's entrance, hearts restored.
+    // (Items and progress are kept — we're not monsters.)
+    showMessage(scene, 'You fainted! ...waking up at the entrance.');
+    state.health = MAX_HEALTH;
+    updateHealthLabel();
+    loadLevel(scene, currentLevelName, LEVELS[currentLevelName].start);
+  } else {
+    showMessage(scene, `${why} (${state.health} ♥ left)`);
+  }
+}
+
+function updateHealthLabel() {
+  healthLabel.setText('♥'.repeat(state.health) + '♡'.repeat(MAX_HEALTH - state.health));
+}
+
+// ============================================================
+//  TOUCH CONTROLS — a translucent D-pad in the bottom-left,
+//  for phones and tablets. We don't use button click events;
+//  instead, every frame we check which buttons have a finger
+//  on them. That way sliding a finger from one arrow to the
+//  next changes direction smoothly, like a real gamepad.
+// ============================================================
+function createTouchControls(scene) {
+  scene.input.addPointer(3); // allow several fingers at once
+
+  // One button texture (circle + up arrow), reused 4× rotated
+  const g = scene.add.graphics();
+  g.fillStyle(0xffffff, 0.22); g.fillCircle(36, 36, 34);
+  g.lineStyle(3, 0xffffff, 0.45); g.strokeCircle(36, 36, 34);
+  g.fillStyle(0xffffff, 0.8);
+  g.fillTriangle(36, 14, 18, 42, 54, 42);
+  g.generateTexture('dpad-btn', 72, 72);
+  g.destroy();
+
+  const cx = 96, cy = 576 - 96, gap = 58;
+  const buttons = [
+    { dir: 'up',    x: cx,       y: cy - gap, angle: 0 },
+    { dir: 'down',  x: cx,       y: cy + gap, angle: 180 },
+    { dir: 'left',  x: cx - gap, y: cy,       angle: -90 },
+    { dir: 'right', x: cx + gap, y: cy,       angle: 90 },
+  ];
+  buttons.forEach(b => {
+    scene.add.image(b.x, b.y, 'dpad-btn')
+      .setScrollFactor(0).setDepth(20).setAngle(b.angle);
+    touchButtons.push(b);
+  });
+}
+
+// Which D-pad buttons have a finger on them right now?
+function updateTouchState(scene) {
+  touch.up = touch.down = touch.left = touch.right = false;
+  if (touchButtons.length === 0) return;
+
+  const pointers = [scene.input.pointer1, scene.input.pointer2,
+                    scene.input.pointer3, scene.input.pointer4];
+  for (const p of pointers) {
+    if (!p || !p.isDown) continue;
+    for (const b of touchButtons) {
+      if (Phaser.Math.Distance.Between(p.x, p.y, b.x, b.y) < 42) {
+        touch[b.dir] = true;
+      }
+    }
+  }
+}
+
+// ============================================================
+//  UPDATE — runs ~60 times per second
+// ============================================================
+function update() {
+  updateTouchState(this);
+
+  if (this.time.now < knockback.until) {
+    // Being pushed back by a dragon bite — controls are ignored briefly
+    player.setVelocity(knockback.vx, knockback.vy);
+  } else {
+    const SPEED = 160;
+    let vx = 0, vy = 0;
+
+    if (keys.left.isDown  || keys.a.isDown || touch.left)  vx = -SPEED;
+    if (keys.right.isDown || keys.d.isDown || touch.right) vx =  SPEED;
+    if (keys.up.isDown    || keys.w.isDown || touch.up)    vy = -SPEED;
+    if (keys.down.isDown  || keys.s.isDown || touch.down)  vy =  SPEED;
+    if (vx !== 0 && vy !== 0) { vx *= 0.7071; vy *= 0.7071; }
+    player.setVelocity(vx, vy);
+  }
+
+  const level = LEVELS[currentLevelName];
+  const col = Math.floor(player.x / TILE);
+  const row = Math.floor(player.y / TILE);
+
+  // --- Did we just ENTER a new tile? If it's an exit, travel. ---
+  const tileKey = `${col},${row}`;
+  if (tileKey !== prevTileKey) {
+    prevTileKey = tileKey;
+    const exit = level.exits[tileKey];
+    if (exit) {
+      loadLevel(this, exit.to, exit.spawn);
+      return; // the world just changed — stop this frame here
+    }
+  }
+
+  // --- Quiz: once the player has stopped pushing on the doors
+  // for a moment (300ms), the next attempt is allowed again. ---
+  if (quizNeedsRetreat && this.time.now - quizLastContact > 300) {
+    quizNeedsRetreat = false;
+  }
+}
+
+// ============================================================
+//  Small helpers for the on-screen text
+// ============================================================
+function updateInventoryLabel() {
+  inventoryLabel.setText(
+    state.inventory.length ? 'Carrying: ' + state.inventory.join(', ') : ''
+  );
+}
+
+function showMessage(scene, text) {
+  messageText.setText(text).setAlpha(1);
+  scene.tweens.killTweensOf(messageText);
+  scene.tweens.add({ targets: messageText, alpha: 0, delay: 2200, duration: 500 });
+}
+</script>
+</body>
+</html>
