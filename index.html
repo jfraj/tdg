@@ -2,21 +2,45 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>My Top-Down Game — Step 4: The Math Doors</title>
 <style>
   html, body {
     margin: 0;
     height: 100%;
     background: #1a1d23;
+    font-family: -apple-system, Helvetica, Arial, sans-serif;
+    color: #9aa3b2;
+    overflow: hidden;
+  }
+  body {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    font-family: -apple-system, Helvetica, Arial, sans-serif;
-    color: #9aa3b2;
   }
-  #hint { margin-top: 12px; font-size: 14px; }
-  canvas { border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+  /* The game area grows to fill the screen; Phaser fits the
+     canvas inside it while keeping the aspect ratio. */
+  #game {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    max-width: 960px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #hint {
+    margin: 6px 0 10px;
+    font-size: 13px;
+    text-align: center;
+    padding: 0 10px;
+  }
+  canvas {
+    border-radius: 8px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    touch-action: none; /* fingers control the game, not page scrolling */
+  }
 </style>
 
 <!-- The Phaser game engine (needs internet the first time) -->
@@ -30,7 +54,7 @@
 <body>
 
 <div id="game"></div>
-<div id="hint">Arrows / WASD — solve the doors for the key, then face the dragons in the cave!</div>
+<div id="hint">Arrows / WASD (or the on-screen pad) — solve the doors for the key, then face the dragons!</div>
 
 <script>
 // ============================================================
@@ -76,15 +100,30 @@ if (!window.LEVELS || !window.LEVELS[STARTING_LEVEL]) {
 
 const config = {
   type: Phaser.AUTO,
-  width: 800,
-  height: 576,
   parent: 'game',
   pixelArt: true,
   physics: { default: 'arcade' },
+  // The scale manager shrinks/grows the game to fit the screen
+  // while keeping its shape — this is what makes phones work.
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: 800,
+    height: 576,
+  },
   scene: { create, update },
 };
 
-new Phaser.Game(config);
+const game = new Phaser.Game(config);
+
+// Phones report their new screen size a moment AFTER rotating,
+// so re-measure a couple of times once things have settled.
+function refit() {
+  setTimeout(() => game.scale.refresh(), 100);
+  setTimeout(() => game.scale.refresh(), 500);
+}
+window.addEventListener('resize', refit);
+window.addEventListener('orientationchange', refit);
 
 let player, keys;
 let layer = null, collider = null;
@@ -102,6 +141,10 @@ let dragonQuestionText = null;
 let dragonHurtUntil = 0; // brief safety period after a bite
 // While knocked back by a bite, the keys are ignored briefly
 let knockback = { until: 0, vx: 0, vy: 0 };
+
+// Touch D-pad (created only on touch devices)
+const touch = { up: false, down: false, left: false, right: false };
+let touchButtons = [];
 
 // Quiz display objects (rebuilt whenever a level loads)
 let quizQuestionText = null;
@@ -276,6 +319,9 @@ function create() {
     up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT',
     w: 'W', a: 'A', s: 'S', d: 'D',
   });
+
+  // On phones and tablets, show the on-screen D-pad
+  if (this.sys.game.device.input.touch) createTouchControls(this);
 
   this.cameras.main.startFollow(player, true, 0.12, 0.12);
 
@@ -694,20 +740,72 @@ function updateHealthLabel() {
 }
 
 // ============================================================
+//  TOUCH CONTROLS — a translucent D-pad in the bottom-left,
+//  for phones and tablets. We don't use button click events;
+//  instead, every frame we check which buttons have a finger
+//  on them. That way sliding a finger from one arrow to the
+//  next changes direction smoothly, like a real gamepad.
+// ============================================================
+function createTouchControls(scene) {
+  scene.input.addPointer(3); // allow several fingers at once
+
+  // One button texture (circle + up arrow), reused 4× rotated
+  const g = scene.add.graphics();
+  g.fillStyle(0xffffff, 0.22); g.fillCircle(36, 36, 34);
+  g.lineStyle(3, 0xffffff, 0.45); g.strokeCircle(36, 36, 34);
+  g.fillStyle(0xffffff, 0.8);
+  g.fillTriangle(36, 14, 18, 42, 54, 42);
+  g.generateTexture('dpad-btn', 72, 72);
+  g.destroy();
+
+  const cx = 96, cy = 576 - 96, gap = 58;
+  const buttons = [
+    { dir: 'up',    x: cx,       y: cy - gap, angle: 0 },
+    { dir: 'down',  x: cx,       y: cy + gap, angle: 180 },
+    { dir: 'left',  x: cx - gap, y: cy,       angle: -90 },
+    { dir: 'right', x: cx + gap, y: cy,       angle: 90 },
+  ];
+  buttons.forEach(b => {
+    scene.add.image(b.x, b.y, 'dpad-btn')
+      .setScrollFactor(0).setDepth(20).setAngle(b.angle);
+    touchButtons.push(b);
+  });
+}
+
+// Which D-pad buttons have a finger on them right now?
+function updateTouchState(scene) {
+  touch.up = touch.down = touch.left = touch.right = false;
+  if (touchButtons.length === 0) return;
+
+  const pointers = [scene.input.pointer1, scene.input.pointer2,
+                    scene.input.pointer3, scene.input.pointer4];
+  for (const p of pointers) {
+    if (!p || !p.isDown) continue;
+    for (const b of touchButtons) {
+      if (Phaser.Math.Distance.Between(p.x, p.y, b.x, b.y) < 42) {
+        touch[b.dir] = true;
+      }
+    }
+  }
+}
+
+// ============================================================
 //  UPDATE — runs ~60 times per second
 // ============================================================
 function update() {
+  updateTouchState(this);
+
   if (this.time.now < knockback.until) {
-    // Being pushed back by a dragon bite — keys are ignored briefly
+    // Being pushed back by a dragon bite — controls are ignored briefly
     player.setVelocity(knockback.vx, knockback.vy);
   } else {
     const SPEED = 160;
     let vx = 0, vy = 0;
 
-    if (keys.left.isDown  || keys.a.isDown) vx = -SPEED;
-    if (keys.right.isDown || keys.d.isDown) vx =  SPEED;
-    if (keys.up.isDown    || keys.w.isDown) vy = -SPEED;
-    if (keys.down.isDown  || keys.s.isDown) vy =  SPEED;
+    if (keys.left.isDown  || keys.a.isDown || touch.left)  vx = -SPEED;
+    if (keys.right.isDown || keys.d.isDown || touch.right) vx =  SPEED;
+    if (keys.up.isDown    || keys.w.isDown || touch.up)    vy = -SPEED;
+    if (keys.down.isDown  || keys.s.isDown || touch.down)  vy =  SPEED;
     if (vx !== 0 && vy !== 0) { vx *= 0.7071; vy *= 0.7071; }
     player.setVelocity(vx, vy);
   }
