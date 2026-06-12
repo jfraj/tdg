@@ -56,6 +56,11 @@
      the game falls back to inventing multiplication questions. -->
 <script src="questions.js"></script>
 
+<!-- The SVG tile art — generated once by an AI model, shipped
+     as plain strings. The game's code-drawn tiles remain the
+     instant fallback if this file is missing or fails. -->
+<script src="sprites-svg.js"></script>
+
 </head>
 <body>
 
@@ -307,6 +312,12 @@ function create() {
   }
 
   tc.refresh();
+
+  // --- Upgrade the tiles to the SVG art (sprites-svg.js) ---
+  // Repaints the 'tiles' canvas in place once the browser has
+  // rasterized the SVGs; until then (and if it ever fails) the
+  // code-drawn tiles above are what you see.
+  if (window.SvgTiles) SvgTiles.install(this, 'tiles', TILE);
 
   // --- Draw the player ---
   let g = this.add.graphics();
