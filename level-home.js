@@ -2,8 +2,9 @@
 //  LEVEL: home — "The Meadow"  (fully randomized!)
 //
 //  Tile legend:
-//    0 grass · 1 stone wall · 2 portal · 5 locked door
+//    0 grass · 1 stone wall · 2 portal · 5 question door
 //    6 house wall · 7 roof · 8 window · 9 house door · 10 tree
+//    14 key door · 15 gem door (each shows what unlocks it!)
 //
 //  Now even the quiz room and the portal room land somewhere
 //  NEW every game — and all the coordinates (key, doors,
@@ -20,18 +21,18 @@ const MEADOW_QUIZ_ROOM = [
   [1,1,1,1,1,1,1],
 ];
 const MEADOW_PORTAL_ROOM = [
-  [1,1,1,1,1],
-  [1,0,0,0,1],
-  [5,0,0,2,1],
-  [1,0,0,0,1],
-  [1,1,1,1,1],
+  [ 1,1,1,1,1],
+  [ 1,0,0,0,1],
+  [14,0,0,2,1],   // 14 = KEY door: its keyhole matches the Golden Key
+  [ 1,0,0,0,1],
+  [ 1,1,1,1,1],
 ];
 // The sea gate: same shape, but built of pink CORAL (12) so the
 // player can tell the two portals apart. Its door needs the gem.
 const MEADOW_SEA_GATE = [
   [12,12,12,12,12],
   [12, 0, 0, 0,12],
-  [ 5, 0, 0, 2,12],
+  [15, 0, 0, 2,12],   // 15 = GEM door: a gem-shaped hollow awaits the Cave Gem
   [12, 0, 0, 0,12],
   [12,12,12,12,12],
 ];
@@ -106,7 +107,9 @@ LEVELS['home'] = {
       Gen.unprotect(map, keep, 0);
 
       // Safety inspection: key and BOTH portals reachable.
-      if (Gen.allReachable(map, [0, 2, 5], [2, 2], [
+      // (5, 14 and 15 are all doors — they open, so they count
+      // as walkable for the flood fill.)
+      if (Gen.allReachable(map, [0, 2, 5, 14, 15], [2, 2], [
         [this.items[0].col, this.items[0].row],
         [portalAt.col + 3, portalAt.row + 2],
         [seaAt.col + 3, seaAt.row + 2],
@@ -143,4 +146,11 @@ LEVELS['home'] = {
   quiz: { doors: [], becomes: 0, min: 2, max: 9 },
   doors: {},
   exits: {},
+
+  // Moving dangers + the healing wizard (handled by index.html).
+  hazards: {
+    texture: 'hazard-bee', count: [2, 3], speed: 70,
+    message: 'Ouch! A bee sting!',
+  },
+  wizard: { greeting: 'Wizard: You look perfectly healthy, adventurer!' },
 };

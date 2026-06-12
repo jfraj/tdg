@@ -19,9 +19,9 @@
 //
 //  Tile legend (same numbers as everywhere else):
 //    0 grass · 1 stone wall · 2 portal · 3 cave floor
-//    4 cave wall · 5 locked door · 6 house wall · 7 roof
+//    4 cave wall · 5 question door · 6 house wall · 7 roof
 //    8 window · 9 house door · 10 tree · 11 sand
-//    12 coral · 13 seaweed
+//    12 coral · 13 seaweed · 14 key door · 15 gem door
 // ============================================================
 window.SVG_TILES = {
 
@@ -97,7 +97,8 @@ window.SVG_TILES = {
     <rect width="32" height="2.5" fill="#564c43" opacity=".6"/>
   </svg>`,
 
-  // 5 — locked door: iron-banded planks with a golden keyhole
+  // 5 — QUESTION door: planks with a "?" plaque (quizzes and
+  // dragons open this one — answers are the key)
   5: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
     <rect width="32" height="32" fill="#4a3018"/>
     <g fill="#7a5a31">
@@ -110,11 +111,12 @@ window.SVG_TILES = {
       <rect x="11.8" y="1" width="2.5" height="30"/>
       <rect x="22.1" y="1" width="2.5" height="30"/>
     </g>
-    <rect x="1" y="5" width="30" height="2.6" rx="1" fill="#33271c"/>
-    <rect x="1" y="24.4" width="30" height="2.6" rx="1" fill="#33271c"/>
-    <circle cx="16" cy="15.5" r="4" fill="#d9a93f" stroke="#8a6420" stroke-width="1"/>
-    <circle cx="16" cy="14.6" r="1.2" fill="#4a3018"/>
-    <path d="M15.3 15.5h1.4l.5 3h-2.4z" fill="#4a3018"/>
+    <rect x="1" y="3.5" width="30" height="2.6" rx="1" fill="#33271c"/>
+    <rect x="1" y="25.9" width="30" height="2.6" rx="1" fill="#33271c"/>
+    <rect x="9" y="9" width="14" height="14" rx="2.5" fill="#33271c"/>
+    <text x="16" y="16.6" text-anchor="middle" dominant-baseline="central"
+      font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="bold"
+      fill="#ffe9a8">?</text>
   </svg>`,
 
   // 6 — house wall: plaster with timber framing
@@ -223,6 +225,45 @@ window.SVG_TILES = {
       <path d="M16 31C14 25.5 19 21.5 16 14.5" stroke="#59b283" stroke-width="1.2"/>
     </g>
     <circle cx="12" cy="6" r="1.4" fill="none" stroke="#bfe6f2" stroke-width="1"/>
+  </svg>`,
+
+  // 14 — KEY door: iron-banded planks with a golden keyhole,
+  // matching the Golden Key it waits for
+  14: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#4a3018"/>
+    <g fill="#7a5a31">
+      <rect x="1.5" y="1" width="8.4" height="30" rx="1"/>
+      <rect x="11.8" y="1" width="8.4" height="30" rx="1"/>
+      <rect x="22.1" y="1" width="8.4" height="30" rx="1"/>
+    </g>
+    <g fill="#8a693c" opacity=".6">
+      <rect x="1.5" y="1" width="2.5" height="30"/>
+      <rect x="11.8" y="1" width="2.5" height="30"/>
+      <rect x="22.1" y="1" width="2.5" height="30"/>
+    </g>
+    <rect x="1" y="4" width="30" height="2.8" rx="1" fill="#d9a93f"/>
+    <rect x="1" y="25.2" width="30" height="2.8" rx="1" fill="#d9a93f"/>
+    <circle cx="16" cy="15.5" r="5" fill="#d9a93f" stroke="#8a6420" stroke-width="1"/>
+    <circle cx="16" cy="14.2" r="1.6" fill="#4a3018"/>
+    <path d="M15 15.2h2l.7 4.3h-3.4z" fill="#4a3018"/>
+  </svg>`,
+
+  // 15 — GEM door: coral stone with a gem-shaped hollow, the
+  // exact silhouette of the Cave Gem, rimmed with its cyan glint
+  15: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#8e3d52"/>
+    <g fill="#a84e66">
+      <rect x="1.5" y="1.5" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="17" y="1.5" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="1.5" y="17" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="17" y="17" width="13.5" height="13.5" rx="1.5"/>
+    </g>
+    <polygon points="16,6 24,14.5 16,26 8,14.5" fill="#1d0f16"/>
+    <polygon points="16,6 24,14.5 16,26 8,14.5" fill="none"
+      stroke="#46d6c9" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M8 14.5h16" stroke="#2a6f68" stroke-width="1"/>
+    <circle cx="26" cy="5" r="1.1" fill="#9ff0e8"/>
+    <circle cx="5.5" cy="26.5" r="1.1" fill="#9ff0e8"/>
   </svg>`,
 };
 

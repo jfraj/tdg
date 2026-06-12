@@ -91,8 +91,16 @@ LEVELS['sea'] = {
   start: null,
   arrival: null,
   items: [
-    { id: 'pearl', name: 'Sea Pearl', texture: 'item-pearl', col: 0, row: 0 },
+    { id: 'pearl', name: 'Sea Pearl', texture: 'item-pearl', col: 0, row: 0,
+      wins: true },  // collecting it ends the game in celebration!
   ],
   quiz: { doors: [], becomes: 11, min: 2, max: 9 },
   exits: {},
+
+  // Moving dangers + the healing wizard (handled by index.html).
+  hazards: {
+    texture: 'hazard-jelly', count: [2, 3], speed: 45,
+    message: 'Zzzap! A jellyfish sting!',
+  },
+  wizard: { greeting: 'Wizard: Swimming in perfect health, I see!' },
 };

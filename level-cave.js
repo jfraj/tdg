@@ -125,4 +125,11 @@ LEVELS['cave'] = {
     message: 'The good dragon bows — the chamber opens!',
   },
   exits: {},
+
+  // Moving dangers + the healing wizard (handled by index.html).
+  hazards: {
+    texture: 'hazard-bat', count: [2, 4], speed: 90,
+    message: 'The bat swoops and bites!',
+  },
+  wizard: { greeting: 'Wizard: Not a scratch on you! Impressive, down here.' },
 };

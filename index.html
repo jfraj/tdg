@@ -56,16 +56,29 @@
      the game falls back to inventing multiplication questions. -->
 <script src="questions.js"></script>
 
+<!-- OPTIONNEL : les questions du MAGICIEN GUÉRISSEUR, même
+     format que questions.js. S'il manque (ou s'il est vide),
+     le magicien invente des multiplications. -->
+<script src="wizard-questions.js"></script>
+
 <!-- The SVG tile art — generated once by an AI model, shipped
      as plain strings. The game's code-drawn tiles remain the
      instant fallback if this file is missing or fails. -->
 <script src="sprites-svg.js"></script>
 
+<!-- OPTIONAL: pregenerated worlds with painted artwork. Press
+     Shift+E in the game to export the current world; follow the
+     instructions inside the downloaded world-….js, then list it
+     here. Several worlds per level are fine — one is picked at
+     random each game. Example:
+<script src="world-home-abc123.js"></script>
+-->
+
 </head>
 <body>
 
 <div id="game"></div>
-<div id="hint">Arrows / WASD (or the on-screen pad) — solve the doors for the key, then face the dragons!</div>
+<div id="hint">Arrows / WASD (or the on-screen pad) — solve the doors, face the dragons... and mind the stingers! The wizard heals those who answer well.</div>
 
 <script>
 // ============================================================
@@ -75,7 +88,7 @@
 //    2 = portal       (walkable — teleports, see "exits")
 //    3 = cave floor   (walkable)
 //    4 = cave wall    (blocks)
-//    5 = locked door  (blocks — opened by items OR by quizzes)
+//    5 = question door (blocks — opened by quizzes and dragons)
 //    6 = house wall   (blocks — decoration)
 //    7 = roof         (blocks — decoration)
 //    8 = window       (blocks — decoration)
@@ -84,9 +97,38 @@
 //   11 = sand         (walkable — sea floor)
 //   12 = coral        (blocks — the sea's walls)
 //   13 = seaweed      (blocks — decoration)
+//   14 = key door     (blocks — its golden keyhole says "find the key")
+//   15 = gem door     (blocks — its gem-shaped hollow says "find the gem")
 // ============================================================
 const TILE = 32;
-const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10, 12, 13];
+const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15];
+
+// --- Pregenerated world artwork (see exportWorld below) ---
+// When a level uses a painted background image, every tile is
+// hidden EXCEPT these: they sit on top of the artwork because
+// they change or animate during play (doors open, portals glow).
+const DYNAMIC_TILES = [2, 5, 14, 15];
+// Flat colors for the exported "control image" — the layout
+// guide an image-generation model paints over. One color per
+// tile number, chosen to be unambiguous.
+const CONTROL_COLORS = {
+  0: '#6ab150',  // grass
+  1: '#8a8a8a',  // stone wall
+  2: '#7b3ff2',  // portal pad
+  3: '#5a4632',  // cave floor
+  4: '#33302c',  // cave wall
+  5: '#b5651d',  // doorway (painted OPEN in the art!)
+  6: '#e8d9b4',  // house wall
+  7: '#c0392b',  // roof
+  8: '#f1c40f',  // window
+  9: '#8b5a2b',  // house door
+  10: '#1e6b2e', // tree
+  11: '#e8d28a', // sand
+  12: '#e26a8d', // coral
+  13: '#2e8b57', // seaweed
+  14: '#d4a017', // key door (painted OPEN in the art!)
+  15: '#20b2aa', // gem door (painted OPEN in the art!)
+};
 const STARTING_LEVEL = 'home';
 
 const MAX_HEALTH = 3;
@@ -161,6 +203,7 @@ window.addEventListener('orientationchange', refitSoon);
 
 let player, keys;
 let layer = null, collider = null;
+let bgImage = null; // the painted world artwork, when a level has one
 let currentLevelName = null;
 let levelLabel, inventoryLabel, messageText, healthLabel;
 let itemSprites = [];
@@ -188,7 +231,27 @@ let questionBanner; // the current question, shown at the top of the screen
 // accidental instant re-triggers).
 let quizNeedsRetreat = false;
 let quizLastContact = 0;   // when we last bumped a quiz door
-let lastLockedMsg = 0;     // throttles the "it's locked" message
+let lastLockedMsg = -9999; // throttles the "it's locked" message
+
+// Moving dangers (bees, bats, jellyfish — see each level file)
+let hazardSprites = [];
+let hazardColliders = [];
+let hazardHurtUntil = 0;   // brief safety period after a sting
+
+// The healing wizard: answer a question, win a heart back
+let wizardSprite = null;
+let wizardOrbs = [];       // the three floating answer orbs
+let wizardOrbLabels = [];
+let wizardActive = false;  // a healing question is on screen
+let wizardChallenge = { min: 2, max: 9 }; // the wizard's current question
+let wizardNeedsRetreat = false; // step off an orb before the next try
+let wizardLastContact = 0;
+let lastWizardChat = -9999; // throttles the "you look healthy" line
+
+// The end-of-game celebration
+let victoryActive = false;
+let victoryObjects = [];   // veil, texts, button, treasures...
+let victoryTimers = [];    // the fireworks + confetti loops
 
 // ============================================================
 //  CREATE — runs once at startup
@@ -196,7 +259,7 @@ let lastLockedMsg = 0;     // throttles the "it's locked" message
 function create() {
 
   // --- Draw the 6 tiles in code ---
-  const tc = this.textures.createCanvas('tiles', TILE * 14, TILE);
+  const tc = this.textures.createCanvas('tiles', TILE * 16, TILE);
   const ctx = tc.context;
 
   // Tile 0: grass
@@ -228,13 +291,15 @@ function create() {
   ctx.fillStyle = '#3a3f48'; ctx.fillRect(TILE * 4 + 3, 3, TILE - 6, TILE - 6);
   ctx.fillStyle = '#22262c'; ctx.fillRect(TILE * 4 + 3, TILE - 8, TILE - 6, 5);
 
-  // Tile 5: locked door
+  // Tile 5: QUESTION door — quizzes and dragons open it, so its
+  // plaque shows a "?": answers are the key here.
   ctx.fillStyle = '#7a4f26'; ctx.fillRect(TILE * 5, 0, TILE, TILE);
   ctx.fillStyle = '#8e5f30';
   ctx.fillRect(TILE * 5 + 3, 2, 7, 28); ctx.fillRect(TILE * 5 + 13, 2, 7, 28); ctx.fillRect(TILE * 5 + 23, 2, 7, 28);
-  ctx.fillStyle = '#2b1d0e';
-  ctx.beginPath(); ctx.arc(TILE * 5 + 16, 14, 3, 0, Math.PI * 2); ctx.fill();
-  ctx.fillRect(TILE * 5 + 15, 14, 2, 7);
+  ctx.fillStyle = '#5a3c1c'; ctx.fillRect(TILE * 5 + 9, 9, 14, 14);
+  ctx.fillStyle = '#ffe9a8';
+  ctx.font = 'bold 13px Helvetica, Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('?', TILE * 5 + 16, 16.5);
 
   // Tile 6: house wall — cream plaster with timber beams
   let o = TILE * 6;
@@ -311,6 +376,36 @@ function create() {
     ctx.stroke();
   }
 
+  // Tile 14: KEY door — the golden keyhole hints at the Golden
+  // Key. Matching lock and key!
+  o = TILE * 14;
+  ctx.fillStyle = '#7a4f26'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#8e5f30';
+  ctx.fillRect(o + 3, 2, 7, 28); ctx.fillRect(o + 13, 2, 7, 28); ctx.fillRect(o + 23, 2, 7, 28);
+  ctx.fillStyle = '#e8c860';
+  ctx.fillRect(o + 2, 4, 28, 3); ctx.fillRect(o + 2, 25, 28, 3);     // golden bands
+  ctx.beginPath(); ctx.arc(o + 16, 15, 6.5, 0, Math.PI * 2); ctx.fill(); // golden plate
+  ctx.fillStyle = '#2b1d0e';
+  ctx.beginPath(); ctx.arc(o + 16, 13.5, 2.5, 0, Math.PI * 2); ctx.fill(); // keyhole
+  ctx.beginPath(); ctx.moveTo(o + 14.8, 14.5); ctx.lineTo(o + 17.2, 14.5);
+  ctx.lineTo(o + 18, 19.5); ctx.lineTo(o + 14, 19.5); ctx.closePath(); ctx.fill();
+
+  // Tile 15: GEM door — a gem-shaped hollow, the exact silhouette
+  // of the Cave Gem, rimmed with its cyan glint.
+  o = TILE * 15;
+  ctx.fillStyle = '#8e3d52'; ctx.fillRect(o, 0, TILE, TILE);       // coral stone
+  ctx.fillStyle = '#a84e66';
+  ctx.fillRect(o + 2, 2, 13, 13); ctx.fillRect(o + 17, 2, 13, 13); // stone slabs
+  ctx.fillRect(o + 2, 17, 13, 13); ctx.fillRect(o + 17, 17, 13, 13);
+  ctx.fillStyle = '#1d0f16';                                       // the recess
+  ctx.beginPath(); ctx.moveTo(o + 16, 6); ctx.lineTo(o + 24, 14);
+  ctx.lineTo(o + 16, 26); ctx.lineTo(o + 8, 14); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#46d6c9'; ctx.lineWidth = 2;                  // cyan glint rim
+  ctx.beginPath(); ctx.moveTo(o + 16, 6); ctx.lineTo(o + 24, 14);
+  ctx.lineTo(o + 16, 26); ctx.lineTo(o + 8, 14); ctx.closePath(); ctx.stroke();
+  ctx.fillStyle = '#9ff0e8';                                       // tiny sparkles
+  ctx.fillRect(o + 25, 4, 2, 2); ctx.fillRect(o + 5, 26, 2, 2);
+
   tc.refresh();
 
   // --- Upgrade the tiles to the SVG art (sprites-svg.js) ---
@@ -372,6 +467,9 @@ function create() {
   g.fillStyle(0xffffff, 0.5);  g.fillCircle(16, 16, 10);
   g.fillStyle(0xffffff, 0.9);  g.fillCircle(16, 16, 5);
   g.generateTexture('fx-glow', 32, 32);
+  g.clear();
+  g.fillStyle(0xffffff); g.fillRect(0, 0, 6, 10); // a confetti piece
+  g.generateTexture('fx-confetti', 6, 10);
   g.destroy();
 
   // --- Draw the dragon (all three look identical on purpose —
@@ -386,6 +484,52 @@ function create() {
   g.fillStyle(0xffffff); g.fillCircle(13, 6, 2); g.fillCircle(19, 6, 2);
   g.fillStyle(0x222222); g.fillRect(12, 5, 2, 2); g.fillRect(18, 5, 2, 2);
   g.generateTexture('dragon', 32, 28);
+  g.destroy();
+
+  // --- The moving dangers: a bee, a bat, a jellyfish ---
+  g = this.add.graphics();
+  g.fillStyle(0xffffff, 0.85);                              // bee wings
+  g.fillEllipse(8, 4, 9, 6); g.fillEllipse(15, 4, 9, 6);
+  g.fillStyle(0xffd23f); g.fillEllipse(11, 10, 16, 11);     // body
+  g.fillStyle(0x3a2e16);                                    // stripes
+  g.fillRect(7, 6, 3, 9); g.fillRect(13, 6, 3, 9);
+  g.fillTriangle(2, 10, 5, 8, 5, 12);                       // sting
+  g.fillStyle(0x222222); g.fillCircle(17, 8, 1.5);          // eye
+  g.generateTexture('hazard-bee', 22, 16);
+  g.clear();
+  g.fillStyle(0x4a3d6b);                                    // bat wings
+  g.fillTriangle(0, 7, 10, 2, 11, 13);
+  g.fillTriangle(26, 7, 16, 2, 15, 13);
+  g.fillStyle(0x5e4d85); g.fillCircle(13, 8, 6);            // body
+  g.fillTriangle(9, 4, 11, 0, 12, 4);                       // ears
+  g.fillTriangle(17, 4, 15, 0, 14, 4);
+  g.fillStyle(0xffd23f); g.fillCircle(11, 7, 1.5); g.fillCircle(15, 7, 1.5);
+  g.generateTexture('hazard-bat', 26, 16);
+  g.clear();
+  g.fillStyle(0xf48bb8, 0.95);                              // jelly dome
+  g.fillCircle(11, 9, 9);
+  g.fillRect(2, 9, 18, 4);
+  g.fillStyle(0xfbc1da); g.fillCircle(8, 6, 3);             // highlight
+  g.lineStyle(2.5, 0xf48bb8, 0.9);                          // tentacles
+  g.beginPath(); g.moveTo(5, 13); g.lineTo(4, 22); g.strokePath();
+  g.beginPath(); g.moveTo(10, 13); g.lineTo(9, 23); g.strokePath();
+  g.beginPath(); g.moveTo(16, 13); g.lineTo(17, 22); g.strokePath();
+  g.fillStyle(0x46315c); g.fillCircle(8, 9, 1.4); g.fillCircle(14, 9, 1.4);
+  g.generateTexture('hazard-jelly', 22, 24);
+  g.destroy();
+
+  // --- The healing wizard ---
+  g = this.add.graphics();
+  g.fillStyle(0x8a5a2b); g.fillRect(22, 13, 2.5, 19);       // staff
+  g.fillStyle(0xffd23f); g.fillCircle(23, 11, 3);           // staff orb
+  g.fillStyle(0x4256c5); g.fillRoundedRect(5, 19, 16, 14, 4); // robe
+  g.fillStyle(0xf2c9a1); g.fillCircle(13, 16, 4.5);         // face
+  g.fillStyle(0xffffff); g.fillTriangle(9, 18, 17, 18, 13, 28); // beard
+  g.fillStyle(0x222222); g.fillRect(11, 14, 1.6, 2); g.fillRect(14, 14, 1.6, 2);
+  g.fillStyle(0x36459c); g.fillTriangle(13, 0, 5, 12, 21, 12);  // hat
+  g.fillRect(3, 11, 20, 3);                                     // brim
+  g.fillStyle(0xffd23f); g.fillCircle(15, 7, 1.8);          // hat star
+  g.generateTexture('wizard', 26, 34);
   g.destroy();
 
   player = this.physics.add.sprite(0, 0, 'player');
@@ -428,6 +572,13 @@ function create() {
   keys = this.input.keyboard.addKeys({
     up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT',
     w: 'W', a: 'A', s: 'S', d: 'D',
+  });
+
+  // Shift+E (parent/level-designer feature): export the current
+  // world as a snapshot + control image, ready to be painted by
+  // an image-generation model. See "PREGENERATED WORLDS" below.
+  this.input.keyboard.on('keydown-E', (ev) => {
+    if (ev.shiftKey) exportWorld(this);
   });
 
   // On phones and tablets, show the on-screen D-pad
@@ -562,11 +713,13 @@ function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Prepare the bank once at startup: keep only valid entries and
-// give each one its pool of possible wrong answers.
-const questionBank = (() => {
-  if (!window.QUESTIONS || !Array.isArray(window.QUESTIONS)) return [];
-  const entries = window.QUESTIONS.filter(e => e && e.q && e.a);
+// Prepare a bank once at startup: keep only valid entries and
+// give each one its pool of possible wrong answers. Used for
+// BOTH banks — the doors/dragons one (questions.js) and the
+// healing wizard's (wizard-questions.js).
+function makeBank(raw) {
+  if (!raw || !Array.isArray(raw)) return [];
+  const entries = raw.filter(e => e && e.q && e.a);
   return entries
     .map(e => {
       let pool = (e.wrong || []).map(String);
@@ -578,15 +731,17 @@ const questionBank = (() => {
       return { q: String(e.q), a: String(e.a), pool };
     })
     .filter(e => e.pool.length >= 2); // an entry needs 2 wrong answers
-})();
+}
+const questionBank = makeBank(window.QUESTIONS);
+const wizardBank = makeBank(window.WIZARD_QUESTIONS);
 
-function newQuestion(quiz) {
-  if (questionBank.length > 0) {
+function newQuestion(quiz, bank = questionBank) {
+  if (bank.length > 0) {
     // ---- A custom question from the bank ----
     let entry;
     do {
-      entry = questionBank[randInt(0, questionBank.length - 1)];
-    } while (questionBank.length > 1 && entry === quiz.lastEntry);
+      entry = bank[randInt(0, bank.length - 1)];
+    } while (bank.length > 1 && entry === quiz.lastEntry);
     quiz.lastEntry = entry; // never the same question twice in a row
 
     quiz.question = entry.q;
@@ -656,7 +811,9 @@ function setQuestionBanner(text) {
 }
 
 // Show the current level's unsolved challenge, if any.
+// (The wizard's healing question, while one is open, wins.)
 function updateBannerForLevel(level) {
+  if (wizardActive) { setQuestionBanner('🧙 ' + wizardChallenge.question); return; }
   const ch = (level.quiz && !level.quiz.solved) ? level.quiz
            : (level.dragons && !level.dragons.solved) ? level.dragons : null;
   setQuestionBanner(ch ? ch.question : '');
@@ -681,10 +838,24 @@ function loadLevel(scene, name, spawn, arriveKey) {
     return;
   }
 
+  // A PREGENERATED world (a snapshot exported with Shift+E,
+  // possibly with painted artwork) takes priority over rolling
+  // a random one. Several snapshots can be registered per
+  // level — one is picked at random, so variety survives.
+  if (!level.map && window.WORLDS && window.WORLDS[name] && window.WORLDS[name].length) {
+    const pool = window.WORLDS[name];
+    applyWorldSnapshot(level, pool[Math.floor(Math.random() * pool.length)]);
+  }
+
   // A level can describe HOW to build itself instead of shipping
   // a fixed map. We build it once per game, then keep it (so an
   // opened door stays open). Refresh the page for a new world!
-  if (!level.map && level.generate) level.map = level.generate();
+  if (!level.map && level.generate) {
+    level.map = level.generate();
+    // Remember the just-born world (before any door opens) so
+    // Shift+E can export it at any moment during play.
+    level._pristine = makeWorldSnapshot(level);
+  }
 
   // Exits no longer say where you land — the DESTINATION decides.
   // Levels with several incoming portals have NAMED arrivals
@@ -706,12 +877,28 @@ function loadLevel(scene, name, spawn, arriveKey) {
   dragonSprites = [];
   dragonLabels.forEach(t => t.destroy());
   dragonLabels = [];
+  hazardSprites.forEach(s => s.destroy());
+  hazardSprites = [];
+  hazardColliders.forEach(c => c.destroy());
+  hazardColliders = [];
+  if (wizardSprite) { wizardSprite.destroy(); wizardSprite = null; }
+  endWizardSession();
+  hazardHurtUntil = 0;
   knockback.until = 0;
 
   const map = scene.make.tilemap({ data: level.map, tileWidth: TILE, tileHeight: TILE });
   const tileset = map.addTilesetImage('tiles');
   layer = map.createLayer(0, tileset, 0, 0);
   layer.setCollision(WALL_TILES);
+
+  // Painted world artwork, if this snapshot has any. The image
+  // goes UNDER the tile layer; the tiles then hide themselves
+  // except the dynamic ones (doors, portals). Until the image
+  // loads — and forever, if it's missing — the classic tiles
+  // are what you see. Art is beauty only: collision still comes
+  // from the number grid above.
+  if (bgImage) { bgImage.destroy(); bgImage = null; }
+  if (level._art) attachWorldArt(scene, level, name, map);
   // The third argument is a callback: the physics engine calls
   // it with the EXACT tile the player is bumping into. This is
   // how doors react to being walked into, not walked past.
@@ -734,6 +921,8 @@ function loadLevel(scene, name, spawn, arriveKey) {
       sprite.destroy();
       updateInventoryLabel();
       showMessage(scene, `You picked up the ${item.name}!`);
+      // The winning treasure! Let its sparkle play, then celebrate.
+      if (item.wins) scene.time.delayedCall(900, () => startVictory(scene));
     });
     itemSprites.push(sprite);
   });
@@ -775,6 +964,10 @@ function loadLevel(scene, name, spawn, arriveKey) {
   // Show this level's question (if any) in the banner.
   updateBannerForLevel(level);
 
+  // Moving dangers and the healing wizard, if this level has them.
+  if (level.hazards) spawnHazards(scene, level, spawn);
+  if (level.wizard) spawnWizard(scene, level, spawn);
+
   player.setPosition(spawn.col * TILE + TILE / 2, spawn.row * TILE + TILE / 2);
   scene.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
   scene.physics.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
@@ -794,11 +987,210 @@ function loadLevel(scene, name, spawn, arriveKey) {
 }
 
 // ============================================================
+//  PREGENERATED WORLDS — snapshots + painted artwork
+//
+//  The flow: play until you get a world you like, press
+//  Shift+E. Two files download: a world-... .js snapshot and a
+//  control-... .png layout guide. Feed the control image to an
+//  image-generation model (the prompt to use is written inside
+//  the .js file), save the result next to index.html under the
+//  name the snapshot expects, add the .js to the script list —
+//  and that world is now in the game's pool, fully painted.
+// ============================================================
+
+// Deep-copy the parts of a level that generate() invented, so
+// the world can be rebuilt later exactly as it was born.
+function makeWorldSnapshot(level, artName) {
+  return JSON.parse(JSON.stringify({
+    art: artName || null,
+    map: level.map,
+    start: level.start,
+    arrival: level.arrival,
+    arrivals: level.arrivals,
+    doors: level.doors,
+    exits: level.exits,
+    items: (level.items || []).map(it => ({ col: it.col, row: it.row })),
+    quiz: level.quiz ? { doors: level.quiz.doors } : null,
+    dragons: level.dragons
+      ? { positions: level.dragons.positions, opens: level.dragons.opens }
+      : null,
+  }));
+}
+
+// The reverse: pour a snapshot back into a level, resetting all
+// progress flags (a fresh game on a familiar world).
+function applyWorldSnapshot(level, snap) {
+  const s = JSON.parse(JSON.stringify(snap)); // never mutate the original
+  level.map = s.map;
+  level.start = s.start || level.start;
+  level.arrival = s.arrival;
+  level.arrivals = s.arrivals;
+  level.doors = s.doors || {};
+  level.exits = s.exits || {};
+  (s.items || []).forEach((it, i) => {
+    if (!level.items || !level.items[i]) return;
+    level.items[i].col = it.col;
+    level.items[i].row = it.row;
+    level.items[i].collected = false;
+  });
+  if (s.quiz && level.quiz) {
+    level.quiz.doors = s.quiz.doors;
+    level.quiz.answers = null;
+    level.quiz.solved = false;
+  }
+  if (s.dragons && level.dragons) {
+    level.dragons.positions = s.dragons.positions;
+    level.dragons.opens = s.dragons.opens;
+    level.dragons.answers = null;
+    level.dragons.solved = false;
+  }
+  level._art = s.art || null;
+}
+
+// Load the painted image (an <img>, for maximum compatibility
+// with both GitHub Pages and double-clicked local files) and
+// slide it under the tile layer once it's ready.
+function attachWorldArt(scene, level, name, map) {
+  const texKey = 'world-art-' + level._art;
+  const place = () => {
+    // The player may have already teleported away while the
+    // image was loading — only dress the level we're still in.
+    if (currentLevelName !== name || !layer) return;
+    bgImage = scene.add.image(0, 0, texKey).setOrigin(0, 0).setDepth(0);
+    bgImage.setDisplaySize(map.widthInPixels, map.heightInPixels);
+    layer.setDepth(0.5); // tiles render above the artwork...
+    layer.forEachTile(t => {       // ...but only the living ones
+      t.visible = DYNAMIC_TILES.includes(t.index);
+    });
+  };
+  if (scene.textures.exists(texKey)) { place(); return; }
+  const img = new Image();
+  img.onload = () => {
+    if (!scene.textures.exists(texKey)) scene.textures.addImage(texKey, img);
+    place();
+  };
+  img.onerror = () => {
+    console.warn('World artwork "' + level._art + '" not found - using classic tiles.');
+  };
+  img.src = level._art;
+}
+
+// --- Shift+E: export the current world for painting ---
+function exportWorld(scene) {
+  const level = LEVELS[currentLevelName];
+  const snap = level._pristine;
+  if (!snap) {
+    showMessage(scene, 'This world came from a snapshot - it is already exported!');
+    return;
+  }
+  const id = Date.now().toString(36);
+  const artName = `world-${currentLevelName}-${id}.png`;
+
+  // 1) The control image: the map as flat colors, the layout
+  //    guide the image model must respect.
+  const cv = document.createElement('canvas');
+  cv.width = snap.map[0].length * TILE;
+  cv.height = snap.map.length * TILE;
+  const c2 = cv.getContext('2d');
+  snap.map.forEach((row, r) => row.forEach((t, c) => {
+    c2.fillStyle = CONTROL_COLORS[t] || '#000000';
+    c2.fillRect(c * TILE, r * TILE, TILE, TILE);
+  }));
+  triggerDownload(`control-${currentLevelName}-${id}.png`, cv.toDataURL('image/png'));
+
+  // 2) The world file: a self-registering snapshot, with the
+  //    art prompt and instructions in its header.
+  const fileSnap = Object.assign({}, snap, { art: artName });
+  triggerDownload(`world-${currentLevelName}-${id}.js`,
+    'data:text/javascript;charset=utf-8,'
+    + encodeURIComponent(worldFileSource(currentLevelName, id, artName, fileSnap)));
+
+  showMessage(scene, '🗺️ World exported! Check your downloads.');
+}
+
+function triggerDownload(filename, href) {
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function worldFileSource(levelName, id, artName, snap) {
+  const usedTiles = [...new Set(snap.map.flat())].sort((a, b) => a - b);
+  const legendNames = {
+    0: 'grass meadow',
+    1: 'stone wall',
+    2: 'portal pad (paint an EMPTY round stone pad - the game animates the portal on top)',
+    3: 'cave floor (packed earth)',
+    4: 'cave rock wall',
+    5: 'OPEN doorway / archway (the game draws the closed door on top until it is unlocked)',
+    6: 'house wall (cream plaster with timber)',
+    7: 'red shingle roof',
+    8: 'house wall with a warm lit window',
+    9: 'house wall with a friendly wooden door',
+    10: 'leafy tree on grass',
+    11: 'warm sand seabed',
+    12: 'pink coral reef wall',
+    13: 'green seaweed on sand',
+    14: 'OPEN doorway / archway (the game draws the closed door on top until it is unlocked)',
+    15: 'OPEN doorway / archway (the game draws the closed door on top until it is unlocked)',
+  };
+  const legend = usedTiles
+    .map(t => `${CONTROL_COLORS[t]} = ${legendNames[t] || 'tile ' + t}`)
+    .join('\n');
+  return [
+    '// ============================================================',
+    `//  WORLD SNAPSHOT: ${levelName} (${id}) - exported with Shift+E`,
+    '//',
+    '//  TO BRING THIS WORLD TO LIFE:',
+    '//  1. Open your image-generation tool (Stable Diffusion with',
+    '//     ControlNet/img2img follows layouts best; ChatGPT or',
+    '//     other image models work too, approximately).',
+    `//  2. Give it the control-${levelName}-${id}.png image AND the`,
+    '//     prompt below.',
+    `//  3. Save the result as:  ${artName}`,
+    '//     in the SAME FOLDER as index.html.',
+    '//  4. Add this line to index.html, next to the level files:',
+    `//       <scr` + `ipt src="world-${levelName}-${id}.js"></scr` + `ipt>`,
+    '//  Done - this world (with its painting) joins the random',
+    '//  pool. Without the image, it still plays with classic tiles.',
+    '//',
+    '//  PROMPT TO USE:',
+    '/*',
+    'Top-down orthographic 2D video game map, cozy cartoon adventure',
+    'style, bright and clean, soft shadows, consistent overhead',
+    'lighting. Repaint this exact layout, keeping every region in',
+    'place and to scale - same proportions as the input image. The',
+    'input colors mean:',
+    legend,
+    'Important: doorway cells must be painted as OPEN passages, and',
+    'portal pads as empty stone pads (the game animates doors and',
+    'portals on top). No characters, no creatures, no items, no',
+    'text, no UI. Rich ground texture and natural variety are',
+    'welcome, but walls must stay clearly solid and walkable areas',
+    'clearly open.',
+    '*/',
+    '// ============================================================',
+    'window.WORLDS = window.WORLDS || {};',
+    `(window.WORLDS['${levelName}'] = window.WORLDS['${levelName}'] || []).push(`,
+    JSON.stringify(snap),
+    ');',
+    '',
+  ].join('\n');
+}
+
+// ============================================================
 //  Door helpers — changing the world
 // ============================================================
 function openTile(scene, level, col, row, becomes) {
-  layer.putTileAt(becomes, col, row);   // change what you see
-  level.map[row][col] = becomes;        // change the data itself
+  const t = layer.putTileAt(becomes, col, row);   // change what you see
+  level.map[row][col] = becomes;                  // change the data itself
+  // Over painted artwork, the new tile (usually plain floor)
+  // must hide itself like the other static tiles — the art
+  // already shows an open doorway there.
+  if (bgImage && t) t.visible = DYNAMIC_TILES.includes(becomes);
 }
 
 // ============================================================
@@ -807,7 +1199,7 @@ function openTile(scene, level, col, row, becomes) {
 //  tiles (5). tile.x / tile.y are the column / row.
 // ============================================================
 function handleDoorBump(scene, tile) {
-  if (tile.index !== 5) return;
+  if (tile.index !== 5 && tile.index !== 14 && tile.index !== 15) return;
 
   const level = LEVELS[currentLevelName];
   const key = `${tile.x},${tile.y}`;
@@ -823,7 +1215,11 @@ function handleDoorBump(scene, tile) {
       // Pushing on a door we can't open yet — give a hint,
       // but at most once every 2 seconds.
       lastLockedMsg = scene.time.now;
-      showMessage(scene, "It's locked tight. There must be a key somewhere...");
+      // The door itself hints at what opens it.
+      showMessage(scene,
+        tile.index === 15 ? 'A gem-shaped hollow glints in the door... something precious would fit there.'
+      : tile.index === 14 ? 'A golden keyhole... locked tight. There must be a key somewhere!'
+      : "It's locked tight...");
     }
     return;
   }
@@ -904,6 +1300,353 @@ function handleDragonTouch(scene, level, i, sprite) {
 
     loseHealth(scene, 'The dragon bites!');
   }
+}
+
+// ============================================================
+//  MOVING DANGERS — bees, bats, jellyfish... Each level file
+//  describes its own in a "hazards" block (texture, how many,
+//  speed, message). They wander the map, bouncing off walls
+//  and changing direction on a whim. Touch one: lose a heart
+//  and get knocked back — then a short safe moment, so a single
+//  brush never drains several hearts at once.
+// ============================================================
+
+// Find a random open tile, optionally far from a spot and/or
+// with open left, right, and top neighbours (the wizard needs
+// those for his three answer orbs).
+function pickWalkableTile(level, opts = {}) {
+  const map = level.map;
+  const open = (c, r) =>
+    r >= 0 && c >= 0 && r < map.length && c < map[0].length &&
+    !WALL_TILES.includes(map[r][c]) && map[r][c] !== 2;
+  for (let t = 0; t < 300; t++) {
+    const col = randInt(1, map[0].length - 2);
+    const row = randInt(1, map.length - 2);
+    if (!open(col, row)) continue;
+    if (opts.awayFrom &&
+        Math.hypot(col - opts.awayFrom.col, row - opts.awayFrom.row) < (opts.minDist || 0)) continue;
+    if (opts.needsNeighbors &&
+        !(open(col - 1, row) && open(col + 1, row) && open(col, row - 1))) continue;
+    return { col, row };
+  }
+  return null;
+}
+
+function spawnHazards(scene, level, spawn) {
+  const hz = level.hazards;
+  const n = Array.isArray(hz.count) ? randInt(hz.count[0], hz.count[1]) : (hz.count || 2);
+  for (let i = 0; i < n; i++) {
+    // Never right next to where the player appears.
+    const at = pickWalkableTile(level, { awayFrom: spawn, minDist: 6 });
+    if (!at) continue;
+    const s = scene.physics.add.sprite(
+      at.col * TILE + TILE / 2, at.row * TILE + TILE / 2, hz.texture);
+    s.setDepth(1);
+    s.body.setSize(14, 12);            // a forgiving hitbox — kind to kids
+    s.setBounce(1, 1);                 // walls send it back the other way
+    s.setCollideWorldBounds(true);
+    s.setData('nextTurn', 0);          // "pick a new direction" timer
+    hazardColliders.push(scene.physics.add.collider(s, layer));
+    scene.physics.add.overlap(player, s, () => hazardTouch(scene, level, s));
+    // A little hover, so they read as alive even when cornered.
+    scene.tweens.add({ targets: s, y: s.y - 3, duration: 380 + i * 60, yoyo: true, repeat: -1 });
+    hazardSprites.push(s);
+  }
+}
+
+function hazardTouch(scene, level, s) {
+  if (scene.time.now < hazardHurtUntil) return; // just stung — safe for a moment
+  hazardHurtUntil = scene.time.now + 1200;
+
+  // Knock the player back, away from the danger.
+  const dx = player.x - s.x, dy = player.y - s.y;
+  const len = Math.max(1, Math.hypot(dx, dy));
+  knockback = { until: scene.time.now + 240, vx: (dx / len) * 380, vy: (dy / len) * 380 };
+
+  loseHealth(scene, (level.hazards && level.hazards.message) || 'Ouch!');
+}
+
+// ============================================================
+//  THE HEALING WIZARD — stands somewhere in the level (his home
+//  is chosen once per world and kept). Walk up to him while
+//  hurt and he asks a question: three answer orbs appear around
+//  him. The right orb restores a heart; a wrong one just brings
+//  a new question (he's a healer, not a dragon). His questions
+//  come from wizard-questions.js — and if that file is missing
+//  or empty, he invents multiplications, like the doors do.
+// ============================================================
+function spawnWizard(scene, level, spawn) {
+  const wz = level.wizard;
+  // Choose his home once per world: a spot whose left, right,
+  // and top neighbours are open — that's where the orbs float.
+  if (wz.col === undefined) {
+    const at = pickWalkableTile(level, { awayFrom: spawn, minDist: 4, needsNeighbors: true })
+            || pickWalkableTile(level, { awayFrom: spawn, minDist: 4 });
+    if (!at) return; // no room anywhere? then no wizard this world
+    wz.col = at.col; wz.row = at.row;
+  }
+  wizardSprite = scene.physics.add.sprite(
+    wz.col * TILE + TILE / 2, wz.row * TILE + TILE / 2, 'wizard');
+  wizardSprite.setDepth(1);
+  scene.tweens.add({ targets: wizardSprite, y: wizardSprite.y - 3, duration: 1100, yoyo: true, repeat: -1 });
+  scene.physics.add.overlap(player, wizardSprite, () => wizardTouched(scene, level));
+}
+
+function wizardTouched(scene, level) {
+  if (wizardActive) return;
+  if (state.health >= MAX_HEALTH) {
+    if (scene.time.now - lastWizardChat > 2500) {
+      lastWizardChat = scene.time.now;
+      showMessage(scene, (level.wizard && level.wizard.greeting) ||
+        'Wizard: You look perfectly healthy, adventurer!');
+    }
+    return;
+  }
+  startWizardSession(scene, level);
+}
+
+function startWizardSession(scene, level) {
+  wizardActive = true;
+  wizardNeedsRetreat = false;
+  newQuestion(wizardChallenge, wizardBank);
+
+  const w = level.wizard;
+  const spots = [
+    { col: w.col - 1, row: w.row },     // left orb
+    { col: w.col,     row: w.row - 1 }, // top orb
+    { col: w.col + 1, row: w.row },     // right orb
+  ];
+  spots.forEach((p, i) => {
+    const orb = scene.physics.add.sprite(
+      p.col * TILE + TILE / 2, p.row * TILE + TILE / 2, 'fx-glow')
+      .setDepth(2).setTint(0xffe08a).setAlpha(0.95).setScale(0.9);
+    orb.body.setCircle(11, 5, 5);
+    scene.tweens.add({ targets: orb, scale: 1.1, duration: 520 + i * 90, yoyo: true, repeat: -1 });
+    scene.physics.add.overlap(player, orb, () => orbTouched(scene, i));
+    // The middle (top) label sits higher so long answers never overlap.
+    const label = scene.add.text(
+      p.col * TILE + TILE / 2, p.row * TILE - 8 - (i === 1 ? 14 : 0), '', {
+      fontFamily: 'Helvetica, Arial', fontSize: '13px', fontStyle: 'bold',
+      color: '#ffe9a8', backgroundColor: '#000000aa', padding: { x: 5, y: 1 },
+    }).setOrigin(0.5).setDepth(2);
+    wizardOrbs.push(orb);
+    wizardOrbLabels.push(label);
+  });
+
+  refreshWizardDisplay();
+  showMessage(scene, 'Wizard: Answer well, and I shall heal you!');
+}
+
+function refreshWizardDisplay() {
+  setQuestionBanner('🧙 ' + wizardChallenge.question);
+  wizardOrbLabels.forEach((l, i) => l.setText(wizardChallenge.answers[i]));
+}
+
+function orbTouched(scene, i) {
+  if (!wizardActive) return;
+  // Being THROWN onto an orb by a sting's knockback is not an
+  // answer — the player must walk there on purpose.
+  if (scene.time.now < knockback.until) return;
+  wizardLastContact = scene.time.now;
+  if (wizardNeedsRetreat) return; // still standing on an orb after the last try
+
+  if (i === wizardChallenge.correctIndex) {
+    state.health = Math.min(MAX_HEALTH, state.health + 1);
+    updateHealthLabel();
+    effectHeal(scene, player.x, player.y);
+    if (state.health >= MAX_HEALTH) {
+      showMessage(scene, 'Wizard: Fully healed — off you go! (+1 ♥)');
+      endWizardSession();
+      updateBannerForLevel(LEVELS[currentLevelName]);
+    } else {
+      showMessage(scene, 'Correct! +1 ♥ — another question, another heart!');
+      newQuestion(wizardChallenge, wizardBank);
+      refreshWizardDisplay();
+      wizardNeedsRetreat = true; // step off the orb before the next answer
+    }
+  } else {
+    showMessage(scene, `${wizardChallenge.answers[i]}? Hmm, not quite — try this one!`);
+    newQuestion(wizardChallenge, wizardBank);
+    refreshWizardDisplay();
+    wizardNeedsRetreat = true;
+    scene.cameras.main.shake(120, 0.003); // a gentle "hmm" wobble
+  }
+}
+
+// Quietly remove the orbs and labels (level change, walking
+// away, or being fully healed).
+function endWizardSession() {
+  wizardActive = false;
+  wizardNeedsRetreat = false;
+  wizardOrbs.forEach(o => o.destroy());
+  wizardOrbs = [];
+  wizardOrbLabels.forEach(l => l.destroy());
+  wizardOrbLabels = [];
+}
+
+// A soft green sparkle when a heart comes back.
+function effectHeal(scene, x, y) {
+  fxRing(scene, x, y, 0x9effa0, 2.0, 500);
+  for (let i = 0; i < 8; i++) {
+    const star = scene.add.image(x + (Math.random() - 0.5) * 30, y + 8, 'fx-star')
+      .setDepth(6).setTint(i % 2 ? 0x9effa0 : 0xe4ffe6)
+      .setScale(0.4 + Math.random() * 0.5);
+    scene.tweens.add({
+      targets: star, y: y - 30 - Math.random() * 30, alpha: 0,
+      duration: 600 + Math.random() * 300, delay: i * 60, ease: 'Sine.out',
+      onComplete: () => star.destroy(),
+    });
+  }
+}
+
+// ============================================================
+//  VICTORY! — collecting the winning treasure (the pearl) fills
+//  the whole screen with celebration: a veil, fireworks,
+//  confetti rain, the three treasures on display, and a button
+//  that builds a BRAND-NEW world to play again. Everything is
+//  screen-space (scrollFactor 0), so it covers the full screen
+//  wherever the camera happens to be.
+// ============================================================
+function startVictory(scene) {
+  if (victoryActive) return;
+  victoryActive = true;
+
+  scene.physics.pause();        // the world holds its breath...
+  setQuestionBanner('');
+  endWizardSession();
+
+  const w = scene.scale.width, h = scene.scale.height;
+  const keep = o => { victoryObjects.push(o); return o; };
+
+  // The veil: night falls over the whole screen.
+  const veil = keep(scene.add.rectangle(0, 0, w, h, 0x10142b, 0)
+    .setOrigin(0).setScrollFactor(0).setDepth(20));
+  scene.tweens.add({ targets: veil, fillAlpha: 0.62, duration: 700 });
+
+  // The title bounces in...
+  const title = keep(scene.add.text(w / 2, h * 0.30, '🏆 You win! 🏆', {
+    fontFamily: 'Helvetica, Arial', fontSize: '44px', fontStyle: 'bold',
+    color: '#ffe9a8', stroke: '#5a3c10', strokeThickness: 8,
+  }).setOrigin(0.5).setScrollFactor(0).setDepth(22).setScale(0));
+  scene.tweens.add({ targets: title, scale: 1, delay: 250, duration: 650, ease: 'Back.out' });
+
+  // ...with the three treasures of the journey beneath it...
+  ['item-key', 'item-gem', 'item-pearl'].forEach((tex, i) => {
+    const t = keep(scene.add.image(w / 2 + (i - 1) * 56, h * 0.44, tex)
+      .setScrollFactor(0).setDepth(22).setScale(0));
+    scene.tweens.add({ targets: t, scale: 1.6, delay: 600 + i * 160, duration: 380, ease: 'Back.out' });
+    scene.tweens.add({ targets: t, y: t.y - 6, delay: 1000, duration: 800 + i * 130, yoyo: true, repeat: -1 });
+  });
+  const sub = keep(scene.add.text(w / 2, h * 0.53,
+    'The key, the gem and the pearl are yours!', {
+    fontFamily: 'Helvetica, Arial', fontSize: '17px',
+    color: '#ffffff',
+  }).setOrigin(0.5).setScrollFactor(0).setDepth(22).setAlpha(0));
+  scene.tweens.add({ targets: sub, alpha: 1, delay: 900, duration: 500 });
+
+  // ...and the way to play again: a brand-new world.
+  const btn = keep(scene.add.text(w / 2, h * 0.65, '▶  Play a new world', {
+    fontFamily: 'Helvetica, Arial', fontSize: '20px', fontStyle: 'bold',
+    color: '#1b2a4a', backgroundColor: '#ffe9a8', padding: { x: 18, y: 10 },
+  }).setOrigin(0.5).setScrollFactor(0).setDepth(22).setAlpha(0));
+  scene.tweens.add({ targets: btn, alpha: 1, delay: 1300, duration: 400 });
+  btn.setInteractive({ useHandCursor: true });
+  btn.on('pointerover', () => btn.setBackgroundColor('#fff7d6'));
+  btn.on('pointerout',  () => btn.setBackgroundColor('#ffe9a8'));
+  btn.on('pointerdown', () => resetGame(scene));
+  const hint = keep(scene.add.text(w / 2, h * 0.65 + 34, '(or press Enter)', {
+    fontFamily: 'Helvetica, Arial', fontSize: '13px', color: '#c9d2e8',
+  }).setOrigin(0.5).setScrollFactor(0).setDepth(22).setAlpha(0));
+  scene.tweens.add({ targets: hint, alpha: 0.9, delay: 1500, duration: 400 });
+  scene.input.keyboard.once('keydown-ENTER', () => resetGame(scene));
+
+  // Fireworks, forever (each burst cleans itself up)...
+  spawnFirework(scene);
+  victoryTimers.push(scene.time.addEvent({
+    delay: 480, loop: true, callback: () => spawnFirework(scene),
+  }));
+  // ...and confetti raining over the whole width of the screen.
+  victoryTimers.push(scene.time.addEvent({
+    delay: 90, loop: true, callback: () => spawnConfetti(scene),
+  }));
+}
+
+const VICTORY_COLORS = [0xff6b6b, 0xffd23f, 0x9effa0, 0x6bc5ff, 0xc59fff, 0xff9ec4];
+
+function spawnFirework(scene) {
+  const w = scene.scale.width, h = scene.scale.height;
+  const x = w * (0.08 + Math.random() * 0.84);
+  const y = h * (0.10 + Math.random() * 0.45);
+  const tint = VICTORY_COLORS[randInt(0, VICTORY_COLORS.length - 1)];
+
+  const ring = scene.add.image(x, y, 'fx-glow')
+    .setScrollFactor(0).setDepth(21).setTint(tint).setAlpha(0.9).setScale(0.2);
+  scene.tweens.add({
+    targets: ring, scale: 2.6, alpha: 0, duration: 550, ease: 'Cubic.out',
+    onComplete: () => ring.destroy(),
+  });
+  for (let i = 0; i < 12; i++) {
+    const ang = (i / 12) * Math.PI * 2 + Math.random() * 0.4;
+    const dist = 40 + Math.random() * 55;
+    const star = scene.add.image(x, y, 'fx-star')
+      .setScrollFactor(0).setDepth(21)
+      .setTint(i % 3 === 0 ? 0xffffff : tint)
+      .setScale(0.5 + Math.random() * 0.6);
+    scene.tweens.add({
+      targets: star,
+      x: x + Math.cos(ang) * dist,
+      y: y + Math.sin(ang) * dist + 18, // sparks fall a little
+      angle: 90 + Math.random() * 180, scale: 0,
+      duration: 600 + Math.random() * 300, ease: 'Cubic.out',
+      onComplete: () => star.destroy(),
+    });
+  }
+}
+
+function spawnConfetti(scene) {
+  const w = scene.scale.width, h = scene.scale.height;
+  for (let i = 0; i < 2; i++) {
+    const piece = scene.add.image(Math.random() * w, -12, 'fx-confetti')
+      .setScrollFactor(0).setDepth(21)
+      .setTint(VICTORY_COLORS[randInt(0, VICTORY_COLORS.length - 1)])
+      .setAngle(Math.random() * 360)
+      .setScale(0.8 + Math.random() * 0.6);
+    scene.tweens.add({         // fall to the bottom of the screen...
+      targets: piece, y: h + 16,
+      angle: piece.angle + 240 + Math.random() * 360,
+      duration: 2300 + Math.random() * 1400, ease: 'Sine.in',
+      onComplete: () => piece.destroy(),
+    });
+    scene.tweens.add({         // ...drifting side to side on the way
+      targets: piece, x: '+=' + (Math.random() < 0.5 ? -1 : 1) * (20 + Math.random() * 30),
+      duration: 420 + Math.random() * 250, yoyo: true, repeat: 8, ease: 'Sine.inOut',
+    });
+  }
+}
+
+// "Play a new world": every level rebuilds itself from scratch —
+// new layouts, new questions, hearts and pockets reset. (Items
+// and progress are wiped on purpose: it's a fresh adventure.)
+function resetGame(scene) {
+  victoryTimers.forEach(t => t.remove());
+  victoryTimers = [];
+  victoryObjects.forEach(o => o.destroy());
+  victoryObjects = [];
+  victoryActive = false;
+  scene.input.keyboard.off('keydown-ENTER'); // disarm the restart key
+  scene.physics.resume();
+
+  state.inventory = [];
+  state.health = MAX_HEALTH;
+  updateInventoryLabel();
+  updateHealthLabel();
+
+  Object.values(LEVELS).forEach(level => {
+    level.map = null; // generate() (or a snapshot) will rebuild it
+    if (level.wizard) { delete level.wizard.col; delete level.wizard.row; }
+  });
+  loadLevel(scene, STARTING_LEVEL, LEVELS[STARTING_LEVEL].start);
+  showMessage(scene, 'A brand-new world! Find the key...');
 }
 
 function loseHealth(scene, why) {
@@ -1120,6 +1863,7 @@ function effectPearlBubbles(scene, x, y) {
 //  UPDATE — runs ~60 times per second
 // ============================================================
 function update() {
+  if (victoryActive) { player.setVelocity(0, 0); return; } // the game is won!
   updateTouchState(this);
 
   if (this.time.now < knockback.until) {
@@ -1141,6 +1885,29 @@ function update() {
   const level = LEVELS[currentLevelName];
   const col = Math.floor(player.x / TILE);
   const row = Math.floor(player.y / TILE);
+
+  // --- The dangers wander: every so often, a new direction ---
+  const hzSpeed = (level.hazards && level.hazards.speed) || 70;
+  for (const s of hazardSprites) {
+    if (this.time.now > s.getData('nextTurn')) {
+      const ang = Math.random() * Math.PI * 2;
+      s.setVelocity(Math.cos(ang) * hzSpeed, Math.sin(ang) * hzSpeed);
+      s.setFlipX(Math.cos(ang) < 0);
+      s.setData('nextTurn', this.time.now + randInt(1400, 3200));
+    }
+  }
+
+  // --- Walking away from the wizard closes his question ---
+  if (wizardActive && wizardSprite &&
+      Phaser.Math.Distance.Between(player.x, player.y, wizardSprite.x, wizardSprite.y) > TILE * 3) {
+    endWizardSession();
+    updateBannerForLevel(level);
+  }
+  // After an answer, the player must step off the orb for a
+  // moment before the next touch counts (same idea as the doors).
+  if (wizardNeedsRetreat && this.time.now - wizardLastContact > 300) {
+    wizardNeedsRetreat = false;
+  }
 
   // --- Did we just ENTER a new tile? If it's an exit, travel. ---
   const tileKey = `${col},${row}`;
