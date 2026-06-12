@@ -91,8 +91,10 @@ LEVELS['sea'] = {
   start: null,
   arrival: null,
   items: [
-    { id: 'pearl', name: 'Sea Pearl', texture: 'item-pearl', col: 0, row: 0,
-      wins: true },  // collecting it ends the game in celebration!
+    // The pearl no longer ends the game — it opens the meadow's
+    // SKY GATE, whose pearl door waits for it. The Sky Star
+    // (level-sky.js) is the final treasure now.
+    { id: 'pearl', name: 'Sea Pearl', texture: 'item-pearl', col: 0, row: 0 },
   ],
   quiz: { doors: [], becomes: 11, min: 2, max: 9 },
   exits: {},

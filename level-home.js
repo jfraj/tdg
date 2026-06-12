@@ -4,7 +4,8 @@
 //  Tile legend:
 //    0 grass · 1 stone wall · 2 portal · 5 question door
 //    6 house wall · 7 roof · 8 window · 9 house door · 10 tree
-//    14 key door · 15 gem door (each shows what unlocks it!)
+//    14 key door · 15 gem door · 16 pearl door (each shows
+//    what unlocks it!) · 18 cloud bank
 //
 //  Now even the quiz room and the portal room land somewhere
 //  NEW every game — and all the coordinates (key, doors,
@@ -29,6 +30,15 @@ const MEADOW_PORTAL_ROOM = [
 ];
 // The sea gate: same shape, but built of pink CORAL (12) so the
 // player can tell the two portals apart. Its door needs the gem.
+// The sky gate: built of white CLOUD BANKS (18), unmistakably
+// from above. Its pearl door (16) waits for the Sea Pearl.
+const MEADOW_SKY_GATE = [
+  [18,18,18,18,18],
+  [18, 0, 0, 0,18],
+  [16, 0, 0, 2,18],
+  [18, 0, 0, 0,18],
+  [18,18,18,18,18],
+];
 const MEADOW_SEA_GATE = [
   [12,12,12,12,12],
   [12, 0, 0, 0,12],
@@ -46,7 +56,8 @@ LEVELS['home'] = {
 
   generate: function () {
     for (let attempt = 0; attempt < 50; attempt++) {
-      const map = Gen.blank(30, 20, 0, 1);
+      // Four rooms share the meadow now — it grew a little.
+      const map = Gen.blank(32, 22, 0, 1);
 
       // Keep the starting corner free.
       const keep = [[2, 2], [3, 2], [2, 3]];
@@ -56,7 +67,8 @@ LEVELS['home'] = {
       const portalAt = Gen.placeRandomly(map, MEADOW_PORTAL_ROOM, 0);
       const quizAt   = Gen.placeRandomly(map, MEADOW_QUIZ_ROOM, 0);
       const seaAt    = Gen.placeRandomly(map, MEADOW_SEA_GATE, 0);
-      if (!portalAt || !quizAt || !seaAt) continue; // no room? roll again
+      const skyAt    = Gen.placeRandomly(map, MEADOW_SKY_GATE, 0);
+      if (!portalAt || !quizAt || !seaAt || !skyAt) continue; // no room? roll again
 
       // ...and every coordinate follows them.
       // Cave portal room: door needs the key.
@@ -70,15 +82,22 @@ LEVELS['home'] = {
         needs: 'gem', becomes: 0,
         message: 'The Cave Gem shimmers... the way to the sea opens!',
       };
+      // Sky gate: its pearl door needs the PEARL from the sea.
+      this.doors[`${skyAt.col},${skyAt.row + 2}`] = {
+        needs: 'pearl', becomes: 0,
+        message: 'The Sea Pearl glows... the way to the sky opens!',
+      };
       this.exits = {};
       this.exits[`${portalAt.col + 3},${portalAt.row + 2}`] = { to: 'cave' };
       this.exits[`${seaAt.col + 3},${seaAt.row + 2}`]       = { to: 'sea' };
+      this.exits[`${skyAt.col + 3},${skyAt.row + 2}`]       = { to: 'sky' };
 
       // Two portals lead here, so arrivals are NAMED: travellers
       // from the cave and from the sea land by their own gate.
       this.arrivals = {
         cave: { col: portalAt.col + 1, row: portalAt.row + 2 },
         sea:  { col: seaAt.col + 1,    row: seaAt.row + 2 },
+        sky:  { col: skyAt.col + 1,    row: skyAt.row + 2 },
       };
       this.arrival = this.arrivals.cave;
 
@@ -109,28 +128,32 @@ LEVELS['home'] = {
       // Safety inspection: key and BOTH portals reachable.
       // (5, 14 and 15 are all doors — they open, so they count
       // as walkable for the flood fill.)
-      if (Gen.allReachable(map, [0, 2, 5, 14, 15], [2, 2], [
+      if (Gen.allReachable(map, [0, 2, 5, 14, 15, 16], [2, 2], [
         [this.items[0].col, this.items[0].row],
         [portalAt.col + 3, portalAt.row + 2],
         [seaAt.col + 3, seaAt.row + 2],
+        [skyAt.col + 3, skyAt.row + 2],
       ])) {
         return map;
       }
     }
 
     // Emergency fallback: the classic fixed layout.
-    const map = Gen.blank(30, 20, 0, 1);
+    const map = Gen.blank(32, 22, 0, 1);
     Gen.stamp(map, 2, 14, MEADOW_QUIZ_ROOM);
     Gen.stamp(map, 25, 8, MEADOW_PORTAL_ROOM);
     Gen.stamp(map, 12, 3, MEADOW_SEA_GATE);
+    Gen.stamp(map, 19, 16, MEADOW_SKY_GATE);
     this.doors = {
       '25,10': { needs: 'key', becomes: 0,
         message: 'The Golden Key turns... the door to the portal opens!' },
       '12,5': { needs: 'gem', becomes: 0,
         message: 'The Cave Gem shimmers... the way to the sea opens!' },
+      '19,18': { needs: 'pearl', becomes: 0,
+        message: 'The Sea Pearl glows... the way to the sky opens!' },
     };
-    this.exits = { '28,10': { to: 'cave' }, '15,5': { to: 'sea' } };
-    this.arrivals = { cave: { col: 26, row: 10 }, sea: { col: 13, row: 5 } };
+    this.exits = { '28,10': { to: 'cave' }, '15,5': { to: 'sea' }, '22,18': { to: 'sky' } };
+    this.arrivals = { cave: { col: 26, row: 10 }, sea: { col: 13, row: 5 }, sky: { col: 20, row: 18 } };
     this.arrival = this.arrivals.cave;
     this.quiz.doors = [{ col: 3, row: 14 }, { col: 5, row: 14 }, { col: 7, row: 14 }];
     this.items[0].col = 5; this.items[0].row = 16;

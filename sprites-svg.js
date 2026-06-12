@@ -22,6 +22,7 @@
 //    4 cave wall · 5 question door · 6 house wall · 7 roof
 //    8 window · 9 house door · 10 tree · 11 sand
 //    12 coral · 13 seaweed · 14 key door · 15 gem door
+//    16 pearl door · 17 cloud floor · 18 cloud bank · 19 star
 // ============================================================
 window.SVG_TILES = {
 
@@ -264,6 +265,52 @@ window.SVG_TILES = {
     <path d="M8 14.5h16" stroke="#2a6f68" stroke-width="1"/>
     <circle cx="26" cy="5" r="1.1" fill="#9ff0e8"/>
     <circle cx="5.5" cy="26.5" r="1.1" fill="#9ff0e8"/>
+  </svg>`,
+
+  // 16 — PEARL door: sky stone with a round pearly socket, the
+  // exact silhouette of the Sea Pearl, shimmering at the rim
+  16: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#6f7bb5"/>
+    <g fill="#8590c9">
+      <rect x="1.5" y="1.5" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="17" y="1.5" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="1.5" y="17" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="17" y="17" width="13.5" height="13.5" rx="1.5"/>
+    </g>
+    <circle cx="16" cy="16" r="8" fill="#1d2038"/>
+    <circle cx="16" cy="16" r="8" fill="none" stroke="#f8f4ec" stroke-width="2"/>
+    <path d="M11 13a6.5 6.5 0 0 1 4-3" stroke="#aab4dd" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+    <circle cx="26" cy="5" r="1.1" fill="#ffd9ec"/>
+    <circle cx="5.5" cy="26.5" r="1.1" fill="#d9e8ff"/>
+  </svg>`,
+
+  // 17 — cloud floor: soft sunlit cloud, walkable
+  17: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#dceefb"/>
+    <ellipse cx="9" cy="10" rx="8" ry="4" fill="#ffffff" opacity=".9"/>
+    <ellipse cx="23" cy="23" rx="7" ry="3.5" fill="#ffffff" opacity=".85"/>
+    <ellipse cx="26" cy="6" rx="4" ry="2" fill="#eef7fd"/>
+    <circle cx="6" cy="26" r="1.2" fill="#c2ddf2"/>
+    <circle cx="17" cy="17" r="1" fill="#c2ddf2"/>
+  </svg>`,
+
+  // 18 — cloud bank: puffy cumulus, the sky's walls
+  18: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#b8d4ea"/>
+    <circle cx="9" cy="22" r="8.5" fill="#e9f3fb"/>
+    <circle cx="22" cy="24" r="7.5" fill="#e9f3fb"/>
+    <circle cx="10" cy="10" r="7.5" fill="#ffffff"/>
+    <circle cx="22" cy="8" r="6.5" fill="#ffffff"/>
+    <circle cx="16" cy="16" r="8.5" fill="#ffffff"/>
+    <circle cx="25" cy="16" r="5" fill="#f4fafe"/>
+  </svg>`,
+
+  // 19 — a small golden star resting on the clouds
+  19: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#dceefb"/>
+    <ellipse cx="16" cy="25.5" rx="9.5" ry="3.5" fill="#ffffff"/>
+    <polygon fill="#ffd23f" points="16,7.5 17.9,12.4 23.1,12.7 19.1,16 20.4,21.1 16,18.2 11.6,21.1 12.9,16 8.9,12.7 14.1,12.4"/>
+    <circle cx="13.5" cy="11.5" r="1" fill="#fff3b0"/>
   </svg>`,
 };
 

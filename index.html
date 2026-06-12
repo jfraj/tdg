@@ -49,6 +49,7 @@
 <script src="level-home.js"></script>
 <script src="level-cave.js"></script>
 <script src="level-sea.js"></script>
+<script src="level-sky.js"></script>
 
 <!-- OPTIONAL: the question bank, written by a parent or teacher.
      Edit it to teach anything — conjugation, vocabulary,
@@ -99,15 +100,19 @@
 //   13 = seaweed      (blocks — decoration)
 //   14 = key door     (blocks — its golden keyhole says "find the key")
 //   15 = gem door     (blocks — its gem-shaped hollow says "find the gem")
+//   16 = pearl door   (blocks — its round pearly socket says "find the pearl")
+//   17 = cloud floor  (walkable — the sky's ground)
+//   18 = cloud bank   (blocks — the sky's walls)
+//   19 = gold star    (blocks — decoration, resting on the clouds)
 // ============================================================
 const TILE = 32;
-const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15];
+const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 18, 19];
 
 // --- Pregenerated world artwork (see exportWorld below) ---
 // When a level uses a painted background image, every tile is
 // hidden EXCEPT these: they sit on top of the artwork because
 // they change or animate during play (doors open, portals glow).
-const DYNAMIC_TILES = [2, 5, 14, 15];
+const DYNAMIC_TILES = [2, 5, 14, 15, 16];
 // Flat colors for the exported "control image" — the layout
 // guide an image-generation model paints over. One color per
 // tile number, chosen to be unambiguous.
@@ -128,6 +133,10 @@ const CONTROL_COLORS = {
   13: '#2e8b57', // seaweed
   14: '#d4a017', // key door (painted OPEN in the art!)
   15: '#20b2aa', // gem door (painted OPEN in the art!)
+  16: '#dda0dd', // pearl door (painted OPEN in the art!)
+  17: '#a8d8f0', // cloud floor
+  18: '#fdfdfd', // cloud bank
+  19: '#ff8c00', // gold star on cloud
 };
 const STARTING_LEVEL = 'home';
 
@@ -259,7 +268,7 @@ let victoryTimers = [];    // the fireworks + confetti loops
 function create() {
 
   // --- Draw the 6 tiles in code ---
-  const tc = this.textures.createCanvas('tiles', TILE * 16, TILE);
+  const tc = this.textures.createCanvas('tiles', TILE * 20, TILE);
   const ctx = tc.context;
 
   // Tile 0: grass
@@ -406,6 +415,55 @@ function create() {
   ctx.fillStyle = '#9ff0e8';                                       // tiny sparkles
   ctx.fillRect(o + 25, 4, 2, 2); ctx.fillRect(o + 5, 26, 2, 2);
 
+  // Tile 16: PEARL door — a round, pearly socket: the exact
+  // silhouette of the Sea Pearl, shimmering at the rim.
+  o = TILE * 16;
+  ctx.fillStyle = '#6f7bb5'; ctx.fillRect(o, 0, TILE, TILE);       // sky stone
+  ctx.fillStyle = '#8590c9';
+  ctx.fillRect(o + 2, 2, 13, 13); ctx.fillRect(o + 17, 2, 13, 13); // stone slabs
+  ctx.fillRect(o + 2, 17, 13, 13); ctx.fillRect(o + 17, 17, 13, 13);
+  ctx.fillStyle = '#1d2038';                                       // the recess
+  ctx.beginPath(); ctx.arc(o + 16, 16, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#f8f4ec'; ctx.lineWidth = 2;                  // pearly rim
+  ctx.beginPath(); ctx.arc(o + 16, 16, 8, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#ffd9ec'; ctx.fillRect(o + 25, 4, 2, 2);        // iridescent
+  ctx.fillStyle = '#d9e8ff'; ctx.fillRect(o + 5, 26, 2, 2);        // glints
+
+  // Tile 17: cloud floor — soft sunlit cloud (walkable)
+  o = TILE * 17;
+  ctx.fillStyle = '#dceefb'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.ellipse(o + 9, 10, 8, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(o + 23, 23, 7, 3.5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#c2ddf2';
+  ctx.fillRect(o + 5, 26, 3, 2); ctx.fillRect(o + 26, 7, 3, 2);
+
+  // Tile 18: cloud bank — puffy cumulus (the sky's walls)
+  o = TILE * 18;
+  ctx.fillStyle = '#b8d4ea'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#e9f3fb';
+  ctx.beginPath(); ctx.arc(o + 9, 22, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 22, 24, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(o + 10, 10, 7.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 22, 8, 6.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 16, 16, 8, 0, Math.PI * 2); ctx.fill();
+
+  // Tile 19: a small golden star resting on the clouds
+  o = TILE * 19;
+  ctx.fillStyle = '#dceefb'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.ellipse(o + 16, 25, 9, 3.5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ffd23f';
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5;
+    const r = i % 2 ? 3.2 : 7.5;
+    ctx[i ? 'lineTo' : 'moveTo'](o + 16 + Math.cos(a) * r, 15 + Math.sin(a) * r);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#fff3b0'; ctx.fillRect(o + 13, 11, 2, 2);
+
   tc.refresh();
 
   // --- Upgrade the tiles to the SVG art (sprites-svg.js) ---
@@ -438,6 +496,15 @@ function create() {
   g.fillStyle(0x2fa89d);
   g.fillTriangle(1, 9, 19, 9, 10, 18);
   g.generateTexture('item-gem', 20, 20);
+  g.clear();
+  g.fillStyle(0xffd23f);                              // the Sky Star
+  g.fillPoints(Array.from({ length: 10 }, (_, i) => {
+    const a = -Math.PI / 2 + i * Math.PI / 5;
+    const r = i % 2 ? 4 : 9;
+    return { x: 10 + Math.cos(a) * r, y: 10 + Math.sin(a) * r };
+  }), true);
+  g.fillStyle(0xfff3b0); g.fillCircle(8, 7, 1.6);     // a glint
+  g.generateTexture('item-star', 20, 20);
   g.clear();
   g.fillStyle(0xf8f4ec); g.fillCircle(10, 10, 7);     // the pearl
   g.lineStyle(2, 0xd8a8bc, 1); g.strokeCircle(10, 10, 7);
@@ -516,7 +583,18 @@ function create() {
   g.beginPath(); g.moveTo(16, 13); g.lineTo(17, 22); g.strokePath();
   g.fillStyle(0x46315c); g.fillCircle(8, 9, 1.4); g.fillCircle(14, 9, 1.4);
   g.generateTexture('hazard-jelly', 22, 24);
+  g.clear();
+  g.fillStyle(0x8e9cb0);                                    // storm cloud
+  g.fillCircle(8, 9, 6); g.fillCircle(15, 7, 7); g.fillCircle(22, 10, 5.5);
+  g.fillRect(4, 9, 22, 5);
+  g.fillStyle(0x76849a); g.fillCircle(10, 13, 4); g.fillCircle(19, 13, 4);
+  g.fillStyle(0x222222); g.fillRect(11, 7, 2, 2); g.fillRect(17, 7, 2, 2); // grumpy eyes
+  g.fillStyle(0xffd23f);                                    // the little bolt
+  g.fillTriangle(13, 15, 18, 15, 13, 21);
+  g.fillTriangle(13, 19, 17, 19, 12, 25);
+  g.generateTexture('hazard-storm', 28, 26);
   g.destroy();
+  g = this.add.graphics();
 
   // --- The healing wizard ---
   g = this.add.graphics();
@@ -978,7 +1056,15 @@ function loadLevel(scene, name, spawn, arriveKey) {
   refit();
 
   levelLabel.setText(level.name);
-  waterOverlay.setVisible(!!level.water);
+  // The atmosphere veil: blue under the sea, and any level can
+  // bring its own color (the sky uses warm sunlight).
+  if (level.veil) {
+    waterOverlay.setFillStyle(level.veil.color, level.veil.alpha);
+    waterOverlay.setVisible(true);
+  } else {
+    waterOverlay.setFillStyle(0x1e5f9e, 0.22);
+    waterOverlay.setVisible(!!level.water);
+  }
   scene.cameras.main.fadeIn(350);
 
   // Remember the tile we spawned on, so an exit can never fire
@@ -1136,6 +1222,10 @@ function worldFileSource(levelName, id, artName, snap) {
     13: 'green seaweed on sand',
     14: 'OPEN doorway / archway (the game draws the closed door on top until it is unlocked)',
     15: 'OPEN doorway / archway (the game draws the closed door on top until it is unlocked)',
+    16: 'OPEN doorway / archway (the game draws the closed door on top until it is unlocked)',
+    17: 'soft sunlit cloud floor (walkable, high in the sky)',
+    18: 'puffy white cumulus cloud bank',
+    19: 'small golden star resting on the clouds',
   };
   const legend = usedTiles
     .map(t => `${CONTROL_COLORS[t]} = ${legendNames[t] || 'tile ' + t}`)
@@ -1199,7 +1289,7 @@ function openTile(scene, level, col, row, becomes) {
 //  tiles (5). tile.x / tile.y are the column / row.
 // ============================================================
 function handleDoorBump(scene, tile) {
-  if (tile.index !== 5 && tile.index !== 14 && tile.index !== 15) return;
+  if (tile.index !== 5 && tile.index !== 14 && tile.index !== 15 && tile.index !== 16) return;
 
   const level = LEVELS[currentLevelName];
   const key = `${tile.x},${tile.y}`;
@@ -1217,7 +1307,8 @@ function handleDoorBump(scene, tile) {
       lastLockedMsg = scene.time.now;
       // The door itself hints at what opens it.
       showMessage(scene,
-        tile.index === 15 ? 'A gem-shaped hollow glints in the door... something precious would fit there.'
+        tile.index === 16 ? 'A round, pearly socket shimmers in the door... what fits in there?'
+      : tile.index === 15 ? 'A gem-shaped hollow glints in the door... something precious would fit there.'
       : tile.index === 14 ? 'A golden keyhole... locked tight. There must be a key somewhere!'
       : "It's locked tight...");
     }
@@ -1531,14 +1622,14 @@ function startVictory(scene) {
   scene.tweens.add({ targets: title, scale: 1, delay: 250, duration: 650, ease: 'Back.out' });
 
   // ...with the three treasures of the journey beneath it...
-  ['item-key', 'item-gem', 'item-pearl'].forEach((tex, i) => {
-    const t = keep(scene.add.image(w / 2 + (i - 1) * 56, h * 0.44, tex)
+  ['item-key', 'item-gem', 'item-pearl', 'item-star'].forEach((tex, i) => {
+    const t = keep(scene.add.image(w / 2 + (i - 1.5) * 52, h * 0.44, tex)
       .setScrollFactor(0).setDepth(22).setScale(0));
     scene.tweens.add({ targets: t, scale: 1.6, delay: 600 + i * 160, duration: 380, ease: 'Back.out' });
     scene.tweens.add({ targets: t, y: t.y - 6, delay: 1000, duration: 800 + i * 130, yoyo: true, repeat: -1 });
   });
   const sub = keep(scene.add.text(w / 2, h * 0.53,
-    'The key, the gem and the pearl are yours!', {
+    'The key, the gem, the pearl and the star are yours!', {
     fontFamily: 'Helvetica, Arial', fontSize: '17px',
     color: '#ffffff',
   }).setOrigin(0.5).setScrollFactor(0).setDepth(22).setAlpha(0));
@@ -1769,7 +1860,37 @@ function updateTouchState(scene) {
 function playCollectEffect(scene, id, x, y) {
   if (id === 'gem') effectCrystalShatter(scene, x, y);
   else if (id === 'pearl') effectPearlBubbles(scene, x, y);
+  else if (id === 'star') effectRainbowBurst(scene, x, y);
   else effectGoldenBurst(scene, x, y); // the key — and any future item
+}
+
+// THE STAR: a rainbow of shooting stars arcing up into the sky.
+function effectRainbowBurst(scene, x, y) {
+  fxRing(scene, x, y, 0xffffff, 2.4, 500);
+  const rainbow = [0xff6b6b, 0xffb24a, 0xffd23f, 0x9effa0, 0x6bc5ff, 0xc59fff];
+  for (let i = 0; i < 12; i++) {
+    const ang = -Math.PI * (0.15 + Math.random() * 0.7); // mostly upward
+    const dist = 36 + Math.random() * 50;
+    const star = scene.add.image(x, y, 'fx-star').setDepth(6)
+      .setTint(rainbow[i % rainbow.length])
+      .setScale(0.6 + Math.random() * 0.6);
+    scene.tweens.add({
+      targets: star,
+      x: x + Math.cos(ang) * dist, y: y + Math.sin(ang) * dist,
+      angle: 120 + Math.random() * 240, scale: 0,
+      duration: 650 + Math.random() * 300, ease: 'Cubic.out',
+      onComplete: () => star.destroy(),
+    });
+  }
+  for (let i = 0; i < 5; i++) {
+    const tw = scene.add.image(
+      x + (Math.random() - 0.5) * 60, y - Math.random() * 40, 'fx-star'
+    ).setDepth(6).setTint(0xffffff).setScale(0);
+    scene.tweens.add({
+      targets: tw, scale: 0.9, duration: 180, delay: 200 + i * 130,
+      yoyo: true, ease: 'Sine.inOut', onComplete: () => tw.destroy(),
+    });
+  }
 }
 
 // A quick expanding ring of light, used by all three.
