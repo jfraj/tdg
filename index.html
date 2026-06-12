@@ -337,6 +337,30 @@ function create() {
   g.lineStyle(2, 0xd8a8bc, 1); g.strokeCircle(10, 10, 7);
   g.fillStyle(0xffffff); g.fillCircle(8, 8, 3);       // its shine
   g.generateTexture('item-pearl', 20, 20);
+
+  // --- Tiny effect textures, tinted at use time ---
+  g.clear();
+  g.fillStyle(0xffffff);                       // a 4-point star
+  g.fillPoints([
+    { x: 6, y: 0 }, { x: 7.6, y: 4.4 }, { x: 12, y: 6 }, { x: 7.6, y: 7.6 },
+    { x: 6, y: 12 }, { x: 4.4, y: 7.6 }, { x: 0, y: 6 }, { x: 4.4, y: 4.4 },
+  ], true);
+  g.generateTexture('fx-star', 12, 12);
+  g.clear();
+  g.fillStyle(0xffffff);                       // a slim crystal shard
+  g.fillTriangle(5, 0, 10, 7, 5, 14);
+  g.fillTriangle(5, 0, 0, 7, 5, 14);
+  g.generateTexture('fx-shard', 10, 14);
+  g.clear();
+  g.lineStyle(2, 0xffffff, 0.9);               // a bubble
+  g.strokeCircle(7, 7, 5.5);
+  g.fillStyle(0xffffff, 0.9); g.fillCircle(5, 5, 1.5);
+  g.generateTexture('fx-bubble', 14, 14);
+  g.clear();
+  g.fillStyle(0xffffff, 0.35); g.fillCircle(16, 16, 16); // a soft glow disc
+  g.fillStyle(0xffffff, 0.5);  g.fillCircle(16, 16, 10);
+  g.fillStyle(0xffffff, 0.9);  g.fillCircle(16, 16, 5);
+  g.generateTexture('fx-glow', 32, 32);
   g.destroy();
 
   // --- Draw the dragon (all three look identical on purpose —
@@ -695,6 +719,7 @@ function loadLevel(scene, name, spawn, arriveKey) {
     scene.physics.add.overlap(player, sprite, () => {
       item.collected = true;
       state.inventory.push(item.id);
+      playCollectEffect(scene, item.id, sprite.x, sprite.y);
       sprite.destroy();
       updateInventoryLabel();
       showMessage(scene, `You picked up the ${item.name}!`);
@@ -978,6 +1003,105 @@ function updateTouchState(scene) {
         touch[b.dir] = true;
       }
     }
+  }
+}
+
+// ============================================================
+//  COLLECT EFFECTS — every treasure sparkles in its own way.
+//  All built from the tiny fx textures + tweens: spawn little
+//  images, animate them, destroy them when the tween ends.
+//  (Depth 6: above the world and the water veil, below the HUD.)
+// ============================================================
+function playCollectEffect(scene, id, x, y) {
+  if (id === 'gem') effectCrystalShatter(scene, x, y);
+  else if (id === 'pearl') effectPearlBubbles(scene, x, y);
+  else effectGoldenBurst(scene, x, y); // the key — and any future item
+}
+
+// A quick expanding ring of light, used by all three.
+function fxRing(scene, x, y, tint, scale, duration) {
+  const ring = scene.add.image(x, y, 'fx-glow')
+    .setDepth(6).setTint(tint).setAlpha(0.85).setScale(0.2);
+  scene.tweens.add({
+    targets: ring, scale, alpha: 0, duration, ease: 'Cubic.out',
+    onComplete: () => ring.destroy(),
+  });
+}
+
+// THE KEY: a golden starburst with lingering twinkles.
+function effectGoldenBurst(scene, x, y) {
+  fxRing(scene, x, y, 0xffd700, 2.2, 450);
+  for (let i = 0; i < 14; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 28 + Math.random() * 42;
+    const star = scene.add.image(x, y, 'fx-star').setDepth(6)
+      .setTint(i % 2 ? 0xffd700 : 0xfff3b0)
+      .setScale(0.5 + Math.random() * 0.7);
+    scene.tweens.add({
+      targets: star,
+      x: x + Math.cos(ang) * dist, y: y + Math.sin(ang) * dist,
+      angle: 90 + Math.random() * 180, scale: 0,
+      duration: 550 + Math.random() * 250, ease: 'Cubic.out',
+      onComplete: () => star.destroy(),
+    });
+  }
+  for (let i = 0; i < 5; i++) { // twinkle... twinkle...
+    const tw = scene.add.image(
+      x + (Math.random() - 0.5) * 60, y + (Math.random() - 0.5) * 60, 'fx-star'
+    ).setDepth(6).setTint(0xfff7cc).setScale(0).setAngle(Math.random() * 90);
+    scene.tweens.add({
+      targets: tw, scale: 0.9, duration: 180, delay: 150 + i * 120,
+      yoyo: true, ease: 'Sine.inOut', onComplete: () => tw.destroy(),
+    });
+  }
+}
+
+// THE GEM: a crystal shatter — spinning cyan shards and a glint.
+function effectCrystalShatter(scene, x, y) {
+  scene.cameras.main.flash(180, 120, 235, 225);
+  fxRing(scene, x, y, 0x66e0d5, 2.6, 500);
+  for (let i = 0; i < 12; i++) {
+    const ang = (i / 12) * Math.PI * 2 + Math.random() * 0.4;
+    const dist = 35 + Math.random() * 45;
+    const shard = scene.add.image(x, y, 'fx-shard').setDepth(6)
+      .setTint(i % 3 === 0 ? 0x9ff0e8 : 0x46d6c9)
+      .setScale(0.7 + Math.random() * 0.6);
+    scene.tweens.add({
+      targets: shard,
+      x: x + Math.cos(ang) * dist,
+      y: y + Math.sin(ang) * dist + 14, // shards fall a little
+      angle: (Math.random() < 0.5 ? -1 : 1) * (180 + Math.random() * 360),
+      alpha: 0, duration: 650 + Math.random() * 250, ease: 'Quad.out',
+      onComplete: () => shard.destroy(),
+    });
+  }
+}
+
+// THE PEARL: pastel sparkles and a plume of rising bubbles.
+function effectPearlBubbles(scene, x, y) {
+  fxRing(scene, x, y, 0xffe6f2, 1.8, 650);
+  const pastels = [0xffffff, 0xffd9ec, 0xd9e8ff, 0xe8d9ff];
+  for (let i = 0; i < 6; i++) {
+    const tw = scene.add.image(
+      x + (Math.random() - 0.5) * 50, y + (Math.random() - 0.5) * 40, 'fx-star'
+    ).setDepth(6).setTint(pastels[i % pastels.length]).setScale(0);
+    scene.tweens.add({
+      targets: tw, scale: 0.8, duration: 220, delay: i * 110,
+      yoyo: true, ease: 'Sine.inOut', onComplete: () => tw.destroy(),
+    });
+  }
+  for (let i = 0; i < 9; i++) {
+    const b = scene.add.image(x + (Math.random() - 0.5) * 26, y + 6, 'fx-bubble')
+      .setDepth(6).setAlpha(0.9).setScale(0.4 + Math.random() * 0.7);
+    scene.tweens.add({ // rise and fade...
+      targets: b, y: y - 50 - Math.random() * 50, alpha: 0,
+      duration: 900 + Math.random() * 500, delay: i * 70, ease: 'Sine.out',
+      onComplete: () => b.destroy(),
+    });
+    scene.tweens.add({ // ...while wobbling side to side
+      targets: b, x: '+=' + (Math.random() < 0.5 ? -10 : 10),
+      duration: 260, delay: i * 70, yoyo: true, repeat: 3, ease: 'Sine.inOut',
+    });
   }
 }
 
