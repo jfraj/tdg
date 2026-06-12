@@ -1,19 +1,18 @@
 // ============================================================
-//  LEVEL: home — "The Meadow"  (procedurally generated!)
+//  LEVEL: home — "The Meadow"  (fully randomized!)
 //
 //  Tile legend:
 //    0 grass · 1 stone wall · 2 portal · 5 locked door
 //    6 house wall · 7 roof · 8 window · 9 house door · 10 tree
 //
-//  Instead of a fixed "map:", this level has a generate()
-//  recipe: two fixed rooms always go in the same place (so the
-//  key, doors, and portal coordinates below keep working), and
-//  then houses and trees land somewhere NEW every game. A
-//  flood-fill check guarantees the world is always winnable.
+//  Now even the quiz room and the portal room land somewhere
+//  NEW every game — and all the coordinates (key, doors,
+//  portal, arrival spot) follow them. The "doors", "exits",
+//  and item positions below start empty: generate() fills
+//  them in once it knows where the rooms ended up.
 // ============================================================
 window.LEVELS = window.LEVELS || {};
 
-// The two fixed structures, as stampable patterns:
 const MEADOW_QUIZ_ROOM = [
   [1,5,1,5,1,5,1],
   [1,0,0,0,0,0,1],
@@ -27,82 +26,121 @@ const MEADOW_PORTAL_ROOM = [
   [1,0,0,0,1],
   [1,1,1,1,1],
 ];
+// The sea gate: same shape, but built of pink CORAL (12) so the
+// player can tell the two portals apart. Its door needs the gem.
+const MEADOW_SEA_GATE = [
+  [12,12,12,12,12],
+  [12, 0, 0, 0,12],
+  [ 5, 0, 0, 2,12],
+  [12, 0, 0, 0,12],
+  [12,12,12,12,12],
+];
 
 LEVELS['home'] = {
 
   name: 'The Meadow',
 
+  // The game always begins here (kept clear during generation).
   start: { col: 2, row: 2 },
 
   generate: function () {
     for (let attempt = 0; attempt < 50; attempt++) {
       const map = Gen.blank(30, 20, 0, 1);
 
-      // The fixed rooms (their positions match the coordinates
-      // in "quiz", "items", "doors" and "exits" below).
-      Gen.stamp(map, 2, 14, MEADOW_QUIZ_ROOM);
-      Gen.stamp(map, 25, 8, MEADOW_PORTAL_ROOM);
-
-      // Keep the spawn area free of random decoration.
+      // Keep the starting corner free.
       const keep = [[2, 2], [3, 2], [2, 3]];
       Gen.protect(map, keep);
 
-      // 3–5 houses with randomly mixed faces. A house is a roof
-      // row (7s) on top of a row of wall/door/window tiles.
-      const houseCount = Gen.randInt(3, 5);
+      // The rooms land at RANDOM spots...
+      const portalAt = Gen.placeRandomly(map, MEADOW_PORTAL_ROOM, 0);
+      const quizAt   = Gen.placeRandomly(map, MEADOW_QUIZ_ROOM, 0);
+      const seaAt    = Gen.placeRandomly(map, MEADOW_SEA_GATE, 0);
+      if (!portalAt || !quizAt || !seaAt) continue; // no room? roll again
+
+      // ...and every coordinate follows them.
+      // Cave portal room: door needs the key.
+      this.doors = {};
+      this.doors[`${portalAt.col},${portalAt.row + 2}`] = {
+        needs: 'key', becomes: 0,
+        message: 'The Golden Key turns... the door to the portal opens!',
+      };
+      // Sea gate: its coral door needs the GEM from the cave.
+      this.doors[`${seaAt.col},${seaAt.row + 2}`] = {
+        needs: 'gem', becomes: 0,
+        message: 'The Cave Gem shimmers... the way to the sea opens!',
+      };
+      this.exits = {};
+      this.exits[`${portalAt.col + 3},${portalAt.row + 2}`] = { to: 'cave' };
+      this.exits[`${seaAt.col + 3},${seaAt.row + 2}`]       = { to: 'sea' };
+
+      // Two portals lead here, so arrivals are NAMED: travellers
+      // from the cave and from the sea land by their own gate.
+      this.arrivals = {
+        cave: { col: portalAt.col + 1, row: portalAt.row + 2 },
+        sea:  { col: seaAt.col + 1,    row: seaAt.row + 2 },
+      };
+      this.arrival = this.arrivals.cave;
+
+      // Quiz room: three doors on its north wall, key inside.
+      this.quiz.doors = [
+        { col: quizAt.col + 1, row: quizAt.row },
+        { col: quizAt.col + 3, row: quizAt.row },
+        { col: quizAt.col + 5, row: quizAt.row },
+      ];
+      this.quiz.answers = null;
+      this.quiz.solved = false;
+      this.items[0].col = quizAt.col + 3;
+      this.items[0].row = quizAt.row + 2;
+      this.items[0].collected = false;
+
+      // The village dressing: houses and trees (a touch fewer —
+      // three rooms now share the meadow).
+      const houseCount = Gen.randInt(3, 4);
       for (let i = 0; i < houseCount; i++) {
         const faces = [[6, 9, 8], [8, 9, 6], [9, 8], [8, 9]];
         const face = faces[Gen.randInt(0, faces.length - 1)];
         Gen.placeRandomly(map, [face.map(() => 7), face], 0);
       }
-
-      // A sprinkle of trees.
-      Gen.scatter(map, 10, Gen.randInt(12, 18), 0);
+      Gen.scatter(map, 10, Gen.randInt(10, 15), 0);
 
       Gen.unprotect(map, keep, 0);
 
-      // Safety inspection: from the spawn, the key and the
-      // portal must both be reachable (doors count as walkable
-      // because they can be opened). If not, roll a new world.
-      if (Gen.allReachable(map, [0, 2, 5], [2, 2], [[5, 16], [28, 10]])) {
+      // Safety inspection: key and BOTH portals reachable.
+      if (Gen.allReachable(map, [0, 2, 5], [2, 2], [
+        [this.items[0].col, this.items[0].row],
+        [portalAt.col + 3, portalAt.row + 2],
+        [seaAt.col + 3, seaAt.row + 2],
+      ])) {
         return map;
       }
     }
-    // Emergency fallback (practically never happens): a plain
-    // meadow with just the two rooms.
+
+    // Emergency fallback: the classic fixed layout.
     const map = Gen.blank(30, 20, 0, 1);
     Gen.stamp(map, 2, 14, MEADOW_QUIZ_ROOM);
     Gen.stamp(map, 25, 8, MEADOW_PORTAL_ROOM);
+    Gen.stamp(map, 12, 3, MEADOW_SEA_GATE);
+    this.doors = {
+      '25,10': { needs: 'key', becomes: 0,
+        message: 'The Golden Key turns... the door to the portal opens!' },
+      '12,5': { needs: 'gem', becomes: 0,
+        message: 'The Cave Gem shimmers... the way to the sea opens!' },
+    };
+    this.exits = { '28,10': { to: 'cave' }, '15,5': { to: 'sea' } };
+    this.arrivals = { cave: { col: 26, row: 10 }, sea: { col: 13, row: 5 } };
+    this.arrival = this.arrivals.cave;
+    this.quiz.doors = [{ col: 3, row: 14 }, { col: 5, row: 14 }, { col: 7, row: 14 }];
+    this.items[0].col = 5; this.items[0].row = 16;
     return map;
   },
 
-  // The Golden Key, inside the quiz room.
+  // Filled in by generate():
+  arrival: null,
+  arrivals: null,
   items: [
-    { id: 'key', name: 'Golden Key', texture: 'item-key', col: 5, row: 16 },
+    { id: 'key', name: 'Golden Key', texture: 'item-key', col: 0, row: 0 },
   ],
-
-  // The MATH quiz guarding the key.
-  quiz: {
-    doors: [
-      { col: 3, row: 14 },
-      { col: 5, row: 14 },
-      { col: 7, row: 14 },
-    ],
-    becomes: 0,
-    min: 2,
-    max: 9,
-  },
-
-  // The item-locked door guarding the portal.
-  doors: {
-    '25,10': {
-      needs: 'key',
-      becomes: 0,
-      message: 'The Golden Key turns... the door to the portal opens!',
-    },
-  },
-
-  exits: {
-    '28,10': { to: 'cave', spawn: { col: 2, row: 8 } },
-  },
+  quiz: { doors: [], becomes: 0, min: 2, max: 9 },
+  doors: {},
+  exits: {},
 };

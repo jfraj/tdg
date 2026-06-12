@@ -48,6 +48,13 @@
 <!-- Your levels — one file per map, all in the SAME FOLDER -->
 <script src="level-home.js"></script>
 <script src="level-cave.js"></script>
+<script src="level-sea.js"></script>
+
+<!-- OPTIONAL: the question bank, written by a parent or teacher.
+     Edit it to teach anything — conjugation, vocabulary,
+     capitals... If this file is missing or its list is empty,
+     the game falls back to inventing multiplication questions. -->
+<script src="questions.js"></script>
 
 </head>
 <body>
@@ -69,9 +76,12 @@
 //    8 = window       (blocks — decoration)
 //    9 = house door   (blocks — decoration, unlike tile 5!)
 //   10 = tree         (blocks — decoration)
+//   11 = sand         (walkable — sea floor)
+//   12 = coral        (blocks — the sea's walls)
+//   13 = seaweed      (blocks — decoration)
 // ============================================================
 const TILE = 32;
-const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10];
+const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10, 12, 13];
 const STARTING_LEVEL = 'home';
 
 const MAX_HEALTH = 3;
@@ -156,7 +166,6 @@ let prevTileKey = '';
 // Dragon guardians
 let dragonSprites = [];
 let dragonLabels = [];
-let dragonQuestionText = null;
 let dragonHurtUntil = 0; // brief safety period after a bite
 // While knocked back by a bite, the keys are ignored briefly
 let knockback = { until: 0, vx: 0, vy: 0 };
@@ -164,10 +173,11 @@ let knockback = { until: 0, vx: 0, vy: 0 };
 // Touch D-pad (created only on touch devices)
 const touch = { up: false, down: false, left: false, right: false };
 let touchButtons = [];
+let waterOverlay; // the blue tint for underwater levels
 
 // Quiz display objects (rebuilt whenever a level loads)
-let quizQuestionText = null;
 let quizDoorLabels = [];
+let questionBanner; // the current question, shown at the top of the screen
 // After a wrong answer, the player must stop pushing on the
 // doors for a moment before the next attempt counts (prevents
 // accidental instant re-triggers).
@@ -181,7 +191,7 @@ let lastLockedMsg = 0;     // throttles the "it's locked" message
 function create() {
 
   // --- Draw the 6 tiles in code ---
-  const tc = this.textures.createCanvas('tiles', TILE * 11, TILE);
+  const tc = this.textures.createCanvas('tiles', TILE * 14, TILE);
   const ctx = tc.context;
 
   // Tile 0: grass
@@ -267,6 +277,35 @@ function create() {
   ctx.beginPath(); ctx.arc(o + 12, 10, 6, 0, Math.PI * 2); ctx.fill();  // light spots
   ctx.beginPath(); ctx.arc(o + 20, 15, 5, 0, Math.PI * 2); ctx.fill();
 
+  // Tile 11: sand — warm speckled seabed (walkable)
+  o = TILE * 11;
+  ctx.fillStyle = '#d8c389'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#c4ae74';
+  for (let i = 0; i < 10; i++)
+    ctx.fillRect(o + Math.floor(Math.random() * 28), Math.floor(Math.random() * 28), 3, 2);
+
+  // Tile 12: coral — a pink reef chunk on sand
+  o = TILE * 12;
+  ctx.fillStyle = '#d8c389'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#e2607a';
+  ctx.beginPath(); ctx.arc(o + 10, 20, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 22, 16, 9, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 16, 26, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#f08a9e';
+  ctx.beginPath(); ctx.arc(o + 20, 12, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 8, 13, 3, 0, Math.PI * 2); ctx.fill();
+
+  // Tile 13: seaweed — wavy green strands on sand
+  o = TILE * 13;
+  ctx.fillStyle = '#d8c389'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.strokeStyle = '#3f8f5a'; ctx.lineWidth = 3;
+  for (const sx of [8, 16, 24]) {
+    ctx.beginPath(); ctx.moveTo(o + sx, 30);
+    ctx.quadraticCurveTo(o + sx + 5, 20, o + sx - 2, 12);
+    ctx.quadraticCurveTo(o + sx - 6, 6, o + sx + 2, 2);
+    ctx.stroke();
+  }
+
   tc.refresh();
 
   // --- Draw the player ---
@@ -293,6 +332,11 @@ function create() {
   g.fillStyle(0x2fa89d);
   g.fillTriangle(1, 9, 19, 9, 10, 18);
   g.generateTexture('item-gem', 20, 20);
+  g.clear();
+  g.fillStyle(0xf8f4ec); g.fillCircle(10, 10, 7);     // the pearl
+  g.lineStyle(2, 0xd8a8bc, 1); g.strokeCircle(10, 10, 7);
+  g.fillStyle(0xffffff); g.fillCircle(8, 8, 3);       // its shine
+  g.generateTexture('item-pearl', 20, 20);
   g.destroy();
 
   // --- Draw the dragon (all three look identical on purpose —
@@ -333,6 +377,18 @@ function create() {
     fontFamily: 'Helvetica, Arial', fontSize: '16px',
     color: '#ffffff', backgroundColor: '#000000aa', padding: { x: 12, y: 6 },
   }).setScrollFactor(0).setDepth(10).setOrigin(0.5).setAlpha(0);
+
+  // The question banner, top-center of the screen.
+  questionBanner = this.add.text(400, 10, '', {
+    fontFamily: 'Helvetica, Arial', fontSize: '15px', fontStyle: 'bold',
+    color: '#ffffff', backgroundColor: '#1b2a4ae6', padding: { x: 12, y: 6 },
+    align: 'center', wordWrap: { width: 480 },
+  }).setScrollFactor(0).setDepth(11).setOrigin(0.5, 0).setVisible(false);
+
+  // A translucent blue veil for underwater levels (above the
+  // world at depth 5, below the HUD at depth 10+).
+  waterOverlay = this.add.rectangle(0, 0, 800, 576, 0x1e5f9e, 0.22)
+    .setOrigin(0).setScrollFactor(0).setDepth(5).setVisible(false);
 
   keys = this.input.keyboard.addKeys({
     up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT',
@@ -400,7 +456,9 @@ const Gen = {
     return true;
   },
 
-  // Stamp a pattern at a random clear spot (gives up after 40 tries).
+  // Stamp a pattern at a random clear spot. Returns WHERE it
+  // landed ({col, row}), or null if no spot was found in 40
+  // tries — important when other things depend on the position!
   placeRandomly(map, pattern, floor) {
     const h = pattern.length, w = pattern[0].length;
     for (let t = 0; t < 40; t++) {
@@ -408,10 +466,10 @@ const Gen = {
       const row = Gen.randInt(1, map.length - 1 - h);
       if (Gen.isClear(map, col, row, w, h, floor)) {
         Gen.stamp(map, col, row, pattern);
-        return true;
+        return { col, row };
       }
     }
-    return false;
+    return null;
   },
 
   // Sprinkle `count` single tiles onto random clear floor cells.
@@ -454,54 +512,96 @@ const Gen = {
 //  This is the "procedural" part: questions are produced by
 //  an algorithm at play time, not typed into a level file.
 // ============================================================
+// ============================================================
+//  QUESTIONS — two possible sources:
+//  1) A question bank in questions.js, written by a parent or
+//     teacher: { q: "...", a: "...", wrong: ["...", "..."] }.
+//     "wrong" is optional — if missing (or too short), wrong
+//     answers are borrowed from the OTHER questions' answers,
+//     which works well when all questions are about the same
+//     topic (e.g. conjugations).
+//  2) If there is no usable bank, the game invents kid-style
+//     multiplication questions, like the original version.
+// ============================================================
 function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// Prepare the bank once at startup: keep only valid entries and
+// give each one its pool of possible wrong answers.
+const questionBank = (() => {
+  if (!window.QUESTIONS || !Array.isArray(window.QUESTIONS)) return [];
+  const entries = window.QUESTIONS.filter(e => e && e.q && e.a);
+  return entries
+    .map(e => {
+      let pool = (e.wrong || []).map(String);
+      if (pool.length < 2) {
+        // borrow the other questions' answers as distractors
+        pool = pool.concat(entries.filter(x => x !== e).map(x => String(x.a)));
+      }
+      pool = [...new Set(pool)].filter(w => w !== String(e.a));
+      return { q: String(e.q), a: String(e.a), pool };
+    })
+    .filter(e => e.pool.length >= 2); // an entry needs 2 wrong answers
+})();
+
 function newQuestion(quiz) {
-  quiz.a = randInt(quiz.min, quiz.max);
-  quiz.b = randInt(quiz.min, quiz.max);
-  const correct = quiz.a * quiz.b;
+  if (questionBank.length > 0) {
+    // ---- A custom question from the bank ----
+    let entry;
+    do {
+      entry = questionBank[randInt(0, questionBank.length - 1)];
+    } while (questionBank.length > 1 && entry === quiz.lastEntry);
+    quiz.lastEntry = entry; // never the same question twice in a row
 
-  // Wrong answers that LOOK plausible — the mistakes kids
-  // really make: off-by-one-row answers like (a±1)×b, a×(b±1).
-  const candidates = [
-    (quiz.a + 1) * quiz.b, (quiz.a - 1) * quiz.b,
-    quiz.a * (quiz.b + 1), quiz.a * (quiz.b - 1),
-    correct + 1, correct - 1,
-  ].filter(n => n > 0 && n !== correct);
+    quiz.question = entry.q;
+    quiz.correct = entry.a;
+    const pool = entry.pool.slice();
+    const wrongs = [];
+    while (wrongs.length < 2) {
+      wrongs.push(pool.splice(randInt(0, pool.length - 1), 1)[0]);
+    }
+    quiz.answers = [entry.a, wrongs[0], wrongs[1]];
+  } else {
+    // ---- An invented multiplication (the original mode) ----
+    const a = randInt(quiz.min, quiz.max);
+    const b = randInt(quiz.min, quiz.max);
+    const correct = a * b;
+    quiz.question = `${a} × ${b} = ?`;
+    quiz.correct = String(correct);
 
-  // Pick 2 distinct wrong answers at random
-  const wrongs = [];
-  while (wrongs.length < 2) {
-    const pick = candidates[randInt(0, candidates.length - 1)];
-    if (!wrongs.includes(pick)) wrongs.push(pick);
+    // Wrong answers that LOOK plausible — the mistakes kids
+    // really make: off-by-one-row answers like (a±1)×b.
+    const candidates = [
+      (a + 1) * b, (a - 1) * b, a * (b + 1), a * (b - 1),
+      correct + 1, correct - 1,
+    ].filter(n => n > 0 && n !== correct);
+    const wrongs = [];
+    while (wrongs.length < 2) {
+      const pick = candidates[randInt(0, candidates.length - 1)];
+      if (!wrongs.includes(pick)) wrongs.push(pick);
+    }
+    quiz.answers = [quiz.correct, String(wrongs[0]), String(wrongs[1])];
   }
 
-  // Shuffle the three answers onto the three doors
-  const answers = [correct, wrongs[0], wrongs[1]];
-  for (let i = answers.length - 1; i > 0; i--) {
+  // Shuffle the three answers onto the three options
+  for (let i = quiz.answers.length - 1; i > 0; i--) {
     const j = randInt(0, i);
-    [answers[i], answers[j]] = [answers[j], answers[i]];
+    [quiz.answers[i], quiz.answers[j]] = [quiz.answers[j], quiz.answers[i]];
   }
-  quiz.answers = answers;
-  quiz.correctIndex = answers.indexOf(correct);
+  quiz.correctIndex = quiz.answers.indexOf(quiz.correct);
 }
 
-// Build (or rebuild) the floating question + door labels
+// Build (or rebuild) the door labels. The question itself goes
+// to the banner at the top of the screen (long questions, like
+// conjugations, don't fit over the doors).
 function setupQuizDisplay(scene, quiz) {
-  const cx = (quiz.doors.reduce((s, d) => s + d.col, 0) / quiz.doors.length) * TILE + TILE / 2;
-  const top = Math.min(...quiz.doors.map(d => d.row)) * TILE;
-
-  quizQuestionText = scene.add.text(cx, top - 24, '', {
-    fontFamily: 'Helvetica, Arial', fontSize: '18px', fontStyle: 'bold',
-    color: '#ffffff', backgroundColor: '#000000aa', padding: { x: 10, y: 4 },
-  }).setOrigin(0.5).setDepth(2);
-
-  quizDoorLabels = quiz.doors.map(d =>
-    scene.add.text(d.col * TILE + TILE / 2, d.row * TILE + TILE / 2, '', {
-      fontFamily: 'Helvetica, Arial', fontSize: '15px', fontStyle: 'bold',
-      color: '#ffe9a8', backgroundColor: '#00000099', padding: { x: 4, y: 1 },
+  // The middle label sits higher so long answers never overlap.
+  quizDoorLabels = quiz.doors.map((d, i) =>
+    scene.add.text(d.col * TILE + TILE / 2,
+                   d.row * TILE + TILE / 2 - (i === 1 ? 24 : 0), '', {
+      fontFamily: 'Helvetica, Arial', fontSize: '13px', fontStyle: 'bold',
+      color: '#ffe9a8', backgroundColor: '#000000aa', padding: { x: 4, y: 1 },
     }).setOrigin(0.5).setDepth(2)
   );
 
@@ -509,14 +609,34 @@ function setupQuizDisplay(scene, quiz) {
 }
 
 function refreshQuizDisplay(quiz) {
-  quizQuestionText.setText(`${quiz.a} × ${quiz.b} = ?`);
-  quiz.doors.forEach((d, i) => quizDoorLabels[i].setText(String(quiz.answers[i])));
+  setQuestionBanner(quiz.question);
+  quiz.doors.forEach((d, i) => quizDoorLabels[i].setText(quiz.answers[i]));
+}
+
+// ----- The question banner -----
+function setQuestionBanner(text) {
+  if (!questionBanner) return;
+  questionBanner.setText(text || '');
+  questionBanner.setVisible(!!text);
+}
+
+// Show the current level's unsolved challenge, if any.
+function updateBannerForLevel(level) {
+  const ch = (level.quiz && !level.quiz.solved) ? level.quiz
+           : (level.dragons && !level.dragons.solved) ? level.dragons : null;
+  setQuestionBanner(ch ? ch.question : '');
+}
+
+// A solved challenge shows its answer for a moment, then clears.
+function celebrateBanner(scene, challenge) {
+  setQuestionBanner(`✔ ${challenge.question}  →  ${challenge.correct}`);
+  scene.time.delayedCall(3000, () => updateBannerForLevel(LEVELS[currentLevelName]));
 }
 
 // ============================================================
 //  LOAD LEVEL
 // ============================================================
-function loadLevel(scene, name, spawn) {
+function loadLevel(scene, name, spawn, arriveKey) {
   const level = LEVELS[name];
 
   // The level's file might be missing from the folder — say so
@@ -531,20 +651,26 @@ function loadLevel(scene, name, spawn) {
   // opened door stays open). Refresh the page for a new world!
   if (!level.map && level.generate) level.map = level.generate();
 
+  // Exits no longer say where you land — the DESTINATION decides.
+  // Levels with several incoming portals have NAMED arrivals
+  // (e.g. the meadow's "cave" and "sea" gates).
+  if (!spawn) {
+    spawn = (arriveKey && level.arrivals && level.arrivals[arriveKey])
+         || level.arrival || level.start;
+  }
+
   currentLevelName = name;
 
   if (layer) layer.destroy();
   if (collider) collider.destroy();
   itemSprites.forEach(s => s.destroy());
   itemSprites = [];
-  if (quizQuestionText) { quizQuestionText.destroy(); quizQuestionText = null; }
   quizDoorLabels.forEach(t => t.destroy());
   quizDoorLabels = [];
   dragonSprites.forEach(s => s.destroy());
   dragonSprites = [];
   dragonLabels.forEach(t => t.destroy());
   dragonLabels = [];
-  if (dragonQuestionText) { dragonQuestionText.destroy(); dragonQuestionText = null; }
   knockback.until = 0;
 
   const map = scene.make.tilemap({ data: level.map, tileWidth: TILE, tileHeight: TILE });
@@ -588,14 +714,6 @@ function loadLevel(scene, name, spawn) {
     const dragons = level.dragons;
     if (!dragons.answers) newQuestion(dragons);
 
-    // The floating question, above the middle of the group
-    const cx = (dragons.positions.reduce((s, d) => s + d.col, 0) / dragons.positions.length) * TILE + TILE / 2;
-    const top = Math.min(...dragons.positions.map(d => d.row)) * TILE;
-    dragonQuestionText = scene.add.text(cx, top - 52, '', {
-      fontFamily: 'Helvetica, Arial', fontSize: '18px', fontStyle: 'bold',
-      color: '#ffffff', backgroundColor: '#000000aa', padding: { x: 10, y: 4 },
-    }).setOrigin(0.5).setDepth(2);
-
     dragons.positions.forEach((d, i) => {
       const sprite = scene.physics.add.sprite(
         d.col * TILE + TILE / 2, d.row * TILE + TILE / 2, 'dragon'
@@ -603,9 +721,11 @@ function loadLevel(scene, name, spawn) {
       sprite.setDepth(1);
       scene.tweens.add({ targets: sprite, y: sprite.y - 5, duration: 900 + i * 120, yoyo: true, repeat: -1 });
 
-      const label = scene.add.text(d.col * TILE + TILE / 2, d.row * TILE - 22, '', {
-        fontFamily: 'Helvetica, Arial', fontSize: '15px', fontStyle: 'bold',
-        color: '#ffe9a8', backgroundColor: '#00000099', padding: { x: 5, y: 1 },
+      // The middle label sits higher so long answers never overlap
+      const label = scene.add.text(d.col * TILE + TILE / 2,
+                                   d.row * TILE - 22 - (i === 1 ? 22 : 0), '', {
+        fontFamily: 'Helvetica, Arial', fontSize: '13px', fontStyle: 'bold',
+        color: '#ffe9a8', backgroundColor: '#000000aa', padding: { x: 5, y: 1 },
       }).setOrigin(0.5).setDepth(2);
 
       scene.physics.add.overlap(player, sprite, () => handleDragonTouch(scene, level, i, sprite));
@@ -615,6 +735,9 @@ function loadLevel(scene, name, spawn) {
 
     refreshDragonDisplay(dragons);
   }
+
+  // Show this level's question (if any) in the banner.
+  updateBannerForLevel(level);
 
   player.setPosition(spawn.col * TILE + TILE / 2, spawn.row * TILE + TILE / 2);
   scene.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
@@ -626,6 +749,7 @@ function loadLevel(scene, name, spawn) {
   refit();
 
   levelLabel.setText(level.name);
+  waterOverlay.setVisible(!!level.water);
   scene.cameras.main.fadeIn(350);
 
   // Remember the tile we spawned on, so an exit can never fire
@@ -681,8 +805,8 @@ function handleDoorBump(scene, tile) {
     // Right answer! Open that one door, the quiz is done.
     openTile(scene, level, tile.x, tile.y, quiz.becomes);
     quiz.solved = true;
-    showMessage(scene, `Correct! ${quiz.a} × ${quiz.b} = ${quiz.a * quiz.b}`);
-    quizQuestionText.setText(`✔ ${quiz.a} × ${quiz.b} = ${quiz.a * quiz.b}`);
+    showMessage(scene, `Correct! ${quiz.correct}`);
+    celebrateBanner(scene, quiz);
     quizDoorLabels[idx].destroy();
   } else {
     // Wrong door: invent a NEW question (procedural!),
@@ -701,8 +825,8 @@ function handleDoorBump(scene, tile) {
 //  knocked back, and face a brand-new question.
 // ============================================================
 function refreshDragonDisplay(dragons) {
-  dragonQuestionText.setText(`${dragons.a} × ${dragons.b} = ?`);
-  dragons.positions.forEach((d, i) => dragonLabels[i].setText(String(dragons.answers[i])));
+  setQuestionBanner(dragons.question);
+  dragons.positions.forEach((d, i) => dragonLabels[i].setText(dragons.answers[i]));
 }
 
 function handleDragonTouch(scene, level, i, sprite) {
@@ -716,7 +840,7 @@ function handleDragonTouch(scene, level, i, sprite) {
     const o = dragons.opens;
     openTile(scene, level, o.col, o.row, o.becomes);
     showMessage(scene, dragons.message || 'The good dragon bows — the way is open!');
-    dragonQuestionText.setText(`✔ ${dragons.a} × ${dragons.b} = ${dragons.a * dragons.b}`);
+    celebrateBanner(scene, dragons);
     sprite.setTint(0x9effa0); // it glows a friendly green
     dragonLabels[i].destroy();
     // ...and the evil dragons fly away
@@ -817,6 +941,15 @@ function layoutUI(scene) {
   inventoryLabel.setPosition(w - 12, 10);
   messageText.setPosition(w / 2, h - 36);
 
+  // The question banner: top-center, dropping below the corner
+  // labels on narrow (portrait) screens.
+  if (questionBanner) {
+    const narrow = w < 430;
+    questionBanner.setPosition(w / 2, narrow ? 74 : 10);
+    questionBanner.setWordWrapWidth(narrow ? w - 16 : Math.min(520, w - 230));
+  }
+  if (waterOverlay) waterOverlay.setSize(w, h);
+
   // The D-pad shrinks a little on narrow screens
   const s = Phaser.Math.Clamp(Math.min(w, h) / 430, 0.7, 1.15);
   const cx = 96 * s, cy = h - 96 * s, gap = 58 * s;
@@ -858,7 +991,8 @@ function update() {
     // Being pushed back by a dragon bite — controls are ignored briefly
     player.setVelocity(knockback.vx, knockback.vy);
   } else {
-    const SPEED = 160;
+    // Each level can set its own speed — swimming is slower!
+    const SPEED = LEVELS[currentLevelName].playerSpeed || 160;
     let vx = 0, vy = 0;
 
     if (keys.left.isDown  || keys.a.isDown || touch.left)  vx = -SPEED;
@@ -879,7 +1013,7 @@ function update() {
     prevTileKey = tileKey;
     const exit = level.exits[tileKey];
     if (exit) {
-      loadLevel(this, exit.to, exit.spawn);
+      loadLevel(this, exit.to, null, exit.arrive); // destination picks the landing
       return; // the world just changed — stop this frame here
     }
   }
