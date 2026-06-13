@@ -235,6 +235,9 @@ let waterOverlay; // the blue tint for underwater levels
 // Quiz display objects (rebuilt whenever a level loads)
 let quizDoorLabels = [];
 let questionBanner; // the current question, shown at the top of the screen
+let gameScene = null;        // set in create(): lets banner helpers reach the scene
+let challengeMarker = null;  // the bobbing icon hovering over the active challenge
+let currentMarkerType = null;
 // After a wrong answer, the player must stop pushing on the
 // doors for a moment before the next attempt counts (prevents
 // accidental instant re-triggers).
@@ -266,6 +269,7 @@ let victoryTimers = [];    // the fireworks + confetti loops
 //  CREATE — runs once at startup
 // ============================================================
 function create() {
+  gameScene = this;
 
   // --- Draw the 6 tiles in code ---
   const tc = this.textures.createCanvas('tiles', TILE * 20, TILE);
@@ -877,29 +881,112 @@ function setupQuizDisplay(scene, quiz) {
 }
 
 function refreshQuizDisplay(quiz) {
-  setQuestionBanner(quiz.question);
+  showChallengeBanner('quiz', quiz.question);
   quiz.doors.forEach((d, i) => quizDoorLabels[i].setText(quiz.answers[i]));
 }
 
 // ----- The question banner -----
+// Each kind of challenge has its own icon, action line, and
+// colour, so the banner SAYS what it's for — and the same icon
+// bobs over the doors/dragons/wizard the question is about, so
+// it's clear WHAT to answer.
+const CHALLENGE_STYLE = {
+  quiz:    { icon: '🚪', action: 'Answer to open the doors',   bg: '#5a3c1cf2', accent: '#ffd98a' },
+  dragons: { icon: '🐉', action: 'Answer to calm the dragons', bg: '#5e1f1ff2', accent: '#ff9a9a' },
+  wizard:  { icon: '🧙', action: 'Answer to heal  (+1 ♥)',     bg: '#163f1ef2', accent: '#9be9a8' },
+};
+
 function setQuestionBanner(text) {
   if (!questionBanner) return;
   questionBanner.setText(text || '');
   questionBanner.setVisible(!!text);
 }
 
+// A typed banner: icon + action header on top, the question below.
+function showChallengeBanner(type, question) {
+  if (!questionBanner) return;
+  const s = CHALLENGE_STYLE[type];
+  questionBanner.setText(`${s.icon} ${s.action}\n${question}`);
+  questionBanner.setBackgroundColor(s.bg);
+  questionBanner.setColor('#ffffff');
+  questionBanner.setVisible(true);
+}
+
+// The bobbing marker: the challenge's icon + a downward arrow,
+// hovering just above the thing the question is about.
+function setChallengeMarker(scene, type, px, py) {
+  if (currentMarkerType === type && challengeMarker) {  // same challenge: just reposition
+    challengeMarker.baseY = py;
+    challengeMarker.setPosition(px, py);
+    return;
+  }
+  clearChallengeMarker();
+  if (!scene) return;
+  const s = CHALLENGE_STYLE[type];
+  const m = scene.add.text(px, py, `${s.icon}\n▼`, {
+    fontFamily: 'Helvetica, Arial', fontSize: '20px', align: 'center',
+    color: s.accent, backgroundColor: '#00000066', padding: { x: 5, y: 2 },
+  }).setOrigin(0.5, 1).setDepth(6);
+  m.baseY = py;
+  scene.tweens.add({ targets: m, y: py - 6, duration: 650, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+  challengeMarker = m;
+  currentMarkerType = type;
+}
+
+function clearChallengeMarker() {
+  if (challengeMarker) { challengeMarker.destroy(); challengeMarker = null; }
+  currentMarkerType = null;
+}
+
+// Hover the marker over a challenge's cluster (middle door, the
+// middle dragon, or the wizard himself).
+function placeChallengeMarker(scene, type, level) {
+  let px, py;
+  if (type === 'wizard') {
+    if (!wizardSprite) { clearChallengeMarker(); return; }
+    px = wizardSprite.x; py = wizardSprite.y - 20;        // above his hat
+  } else {
+    const ch = type === 'quiz' ? level.quiz : level.dragons;
+    const cells = type === 'quiz' ? (ch && ch.doors) : (ch && ch.positions);
+    if (!cells || !cells.length) { clearChallengeMarker(); return; }
+    const mid = cells[Math.floor(cells.length / 2)];
+    // The quiz's middle door label is raised 24px, so the quiz
+    // marker sits higher to clear it; dragons have no raised label.
+    px = mid.col * TILE + TILE / 2;
+    py = mid.row * TILE - (type === 'quiz' ? 24 : 8);
+  }
+  setChallengeMarker(scene, type, px, py);
+}
+
 // Show the current level's unsolved challenge, if any.
 // (The wizard's healing question, while one is open, wins.)
 function updateBannerForLevel(level) {
-  if (wizardActive) { setQuestionBanner('🧙 ' + wizardChallenge.question); return; }
-  const ch = (level.quiz && !level.quiz.solved) ? level.quiz
-           : (level.dragons && !level.dragons.solved) ? level.dragons : null;
-  setQuestionBanner(ch ? ch.question : '');
+  if (wizardActive) {
+    showChallengeBanner('wizard', wizardChallenge.question);
+    placeChallengeMarker(gameScene, 'wizard', level);
+    return;
+  }
+  if (level.quiz && !level.quiz.solved && level.quiz.question) {
+    showChallengeBanner('quiz', level.quiz.question);
+    placeChallengeMarker(gameScene, 'quiz', level);
+    return;
+  }
+  if (level.dragons && !level.dragons.solved && level.dragons.question) {
+    showChallengeBanner('dragons', level.dragons.question);
+    placeChallengeMarker(gameScene, 'dragons', level);
+    return;
+  }
+  setQuestionBanner('');
+  clearChallengeMarker();
 }
 
 // A solved challenge shows its answer for a moment, then clears.
 function celebrateBanner(scene, challenge) {
-  setQuestionBanner(`✔ ${challenge.question}  →  ${challenge.correct}`);
+  questionBanner.setText(`✔  ${challenge.question}  →  ${challenge.correct}`);
+  questionBanner.setBackgroundColor('#1e6b2ef2');
+  questionBanner.setColor('#ffffff');
+  questionBanner.setVisible(true);
+  clearChallengeMarker();   // the marker's job is done
   scene.time.delayedCall(3000, () => updateBannerForLevel(LEVELS[currentLevelName]));
 }
 
@@ -961,6 +1048,7 @@ function loadLevel(scene, name, spawn, arriveKey) {
   hazardColliders = [];
   if (wizardSprite) { wizardSprite.destroy(); wizardSprite = null; }
   endWizardSession();
+  clearChallengeMarker();
   hazardHurtUntil = 0;
   knockback.until = 0;
 
@@ -1328,6 +1416,7 @@ function handleDoorBump(scene, tile) {
     // Right answer! Open that one door, the quiz is done.
     openTile(scene, level, tile.x, tile.y, quiz.becomes);
     quiz.solved = true;
+    clearChallengeMarker();
     showMessage(scene, `Correct! ${quiz.correct}`);
     celebrateBanner(scene, quiz);
     quizDoorLabels[idx].destroy();
@@ -1348,7 +1437,7 @@ function handleDoorBump(scene, tile) {
 //  knocked back, and face a brand-new question.
 // ============================================================
 function refreshDragonDisplay(dragons) {
-  setQuestionBanner(dragons.question);
+  showChallengeBanner('dragons', dragons.question);
   dragons.positions.forEach((d, i) => dragonLabels[i].setText(dragons.answers[i]));
 }
 
@@ -1360,6 +1449,7 @@ function handleDragonTouch(scene, level, i, sprite) {
   if (i === dragons.correctIndex) {
     // The GOOD dragon! It opens the way.
     dragons.solved = true;
+    clearChallengeMarker();
     const o = dragons.opens;
     openTile(scene, level, o.col, o.row, o.becomes);
     showMessage(scene, dragons.message || 'The good dragon bows — the way is open!');
@@ -1537,7 +1627,8 @@ function startWizardSession(scene, level) {
 }
 
 function refreshWizardDisplay() {
-  setQuestionBanner('🧙 ' + wizardChallenge.question);
+  showChallengeBanner('wizard', wizardChallenge.question);
+  placeChallengeMarker(gameScene, 'wizard', LEVELS[currentLevelName]);
   wizardOrbLabels.forEach((l, i) => l.setText(wizardChallenge.answers[i]));
 }
 
@@ -1612,6 +1703,7 @@ function startVictory(scene) {
 
   scene.physics.pause();        // the world holds its breath...
   setQuestionBanner('');
+  clearChallengeMarker();
   endWizardSession();
 
   const w = scene.scale.width, h = scene.scale.height;
