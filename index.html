@@ -1403,8 +1403,9 @@ function handleDragonTouch(scene, level, i, sprite) {
 // ============================================================
 
 // Find a random open tile, optionally far from a spot and/or
-// with open left, right, and top neighbours (the wizard needs
-// those for his three answer orbs).
+// with room around it for the wizard's three answer orbs: the
+// orbs float TWO tiles out (left, right, above), and the cell
+// between must be open too, so every orb can be walked to.
 function pickWalkableTile(level, opts = {}) {
   const map = level.map;
   const open = (c, r) =>
@@ -1417,7 +1418,9 @@ function pickWalkableTile(level, opts = {}) {
     if (opts.awayFrom &&
         Math.hypot(col - opts.awayFrom.col, row - opts.awayFrom.row) < (opts.minDist || 0)) continue;
     if (opts.needsNeighbors &&
-        !(open(col - 1, row) && open(col + 1, row) && open(col, row - 1))) continue;
+        !(open(col - 1, row) && open(col - 2, row) &&
+          open(col + 1, row) && open(col + 2, row) &&
+          open(col, row - 1) && open(col, row - 2))) continue;
     return { col, row };
   }
   return null;
@@ -1498,14 +1501,20 @@ function wizardTouched(scene, level) {
 
 function startWizardSession(scene, level) {
   wizardActive = true;
-  wizardNeedsRetreat = false;
+  // A grace moment: the player is standing right at the wizard
+  // when the orbs appear, so the first instant of contact never
+  // counts — an answer must be walked to on purpose.
+  wizardNeedsRetreat = true;
+  wizardLastContact = scene.time.now;
   newQuestion(wizardChallenge, wizardBank);
 
   const w = level.wizard;
+  // Two tiles out: far enough that nobody is already touching
+  // one when the question appears.
   const spots = [
-    { col: w.col - 1, row: w.row },     // left orb
-    { col: w.col,     row: w.row - 1 }, // top orb
-    { col: w.col + 1, row: w.row },     // right orb
+    { col: w.col - 2, row: w.row },     // left orb
+    { col: w.col,     row: w.row - 2 }, // top orb
+    { col: w.col + 2, row: w.row },     // right orb
   ];
   spots.forEach((p, i) => {
     const orb = scene.physics.add.sprite(
@@ -1514,9 +1523,8 @@ function startWizardSession(scene, level) {
     orb.body.setCircle(11, 5, 5);
     scene.tweens.add({ targets: orb, scale: 1.1, duration: 520 + i * 90, yoyo: true, repeat: -1 });
     scene.physics.add.overlap(player, orb, () => orbTouched(scene, i));
-    // The middle (top) label sits higher so long answers never overlap.
     const label = scene.add.text(
-      p.col * TILE + TILE / 2, p.row * TILE - 8 - (i === 1 ? 14 : 0), '', {
+      p.col * TILE + TILE / 2, p.row * TILE - 8, '', {
       fontFamily: 'Helvetica, Arial', fontSize: '13px', fontStyle: 'bold',
       color: '#ffe9a8', backgroundColor: '#000000aa', padding: { x: 5, y: 1 },
     }).setOrigin(0.5).setDepth(2);
@@ -2020,7 +2028,7 @@ function update() {
 
   // --- Walking away from the wizard closes his question ---
   if (wizardActive && wizardSprite &&
-      Phaser.Math.Distance.Between(player.x, player.y, wizardSprite.x, wizardSprite.y) > TILE * 3) {
+      Phaser.Math.Distance.Between(player.x, player.y, wizardSprite.x, wizardSprite.y) > TILE * 3.5) {
     endWizardSession();
     updateBannerForLevel(level);
   }
