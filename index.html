@@ -50,6 +50,7 @@
 <script src="level-cave.js"></script>
 <script src="level-sea.js"></script>
 <script src="level-sky.js"></script>
+<script src="level-space.js"></script>
 
 <!-- OPTIONAL: the question bank, written by a parent or teacher.
      Edit it to teach anything — conjugation, vocabulary,
@@ -104,15 +105,19 @@
 //   17 = cloud floor  (walkable — the sky's ground)
 //   18 = cloud bank   (blocks — the sky's walls)
 //   19 = gold star    (blocks — decoration, resting on the clouds)
+//   20 = star door    (blocks — its star-shaped socket says "find the star")
+//   21 = space floor  (walkable — the space station ground)
+//   22 = asteroid     (blocks — the space walls)
+//   23 = space star   (blocks — decoration, a glowing star)
 // ============================================================
 const TILE = 32;
-const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 18, 19];
+const WALL_TILES = [1, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 18, 19, 20, 22, 23];
 
 // --- Pregenerated world artwork (see exportWorld below) ---
 // When a level uses a painted background image, every tile is
 // hidden EXCEPT these: they sit on top of the artwork because
 // they change or animate during play (doors open, portals glow).
-const DYNAMIC_TILES = [2, 5, 14, 15, 16];
+const DYNAMIC_TILES = [2, 5, 14, 15, 16, 20];
 // Flat colors for the exported "control image" — the layout
 // guide an image-generation model paints over. One color per
 // tile number, chosen to be unambiguous.
@@ -137,6 +142,10 @@ const CONTROL_COLORS = {
   17: '#a8d8f0', // cloud floor
   18: '#fdfdfd', // cloud bank
   19: '#ff8c00', // gold star on cloud
+  20: '#9370db', // star door (painted OPEN in the art!)
+  21: '#15182e', // space floor
+  22: '#5a5a6a', // asteroid wall
+  23: '#ffd23f', // glowing space star
 };
 const STARTING_LEVEL = 'home';
 
@@ -272,7 +281,7 @@ function create() {
   gameScene = this;
 
   // --- Draw the 6 tiles in code ---
-  const tc = this.textures.createCanvas('tiles', TILE * 20, TILE);
+  const tc = this.textures.createCanvas('tiles', TILE * 24, TILE);
   const ctx = tc.context;
 
   // Tile 0: grass
@@ -468,6 +477,58 @@ function create() {
   ctx.closePath(); ctx.fill();
   ctx.fillStyle = '#fff3b0'; ctx.fillRect(o + 13, 11, 2, 2);
 
+  // Tile 20: STAR door — a star-shaped socket, the silhouette of
+  // the Sky Star, rimmed in gold.
+  o = TILE * 20;
+  ctx.fillStyle = '#2b2f4a'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#3c4266';
+  ctx.fillRect(o + 2, 2, 13, 13); ctx.fillRect(o + 17, 2, 13, 13);
+  ctx.fillRect(o + 2, 17, 13, 13); ctx.fillRect(o + 17, 17, 13, 13);
+  (function () {
+    var CX = o + 16, CY = 16, OR = 11, IR = 4.6;
+    ctx.fillStyle = '#12152b'; ctx.beginPath();
+    for (var i = 0; i < 10; i++) { var a = -Math.PI/2 + i*Math.PI/5; var rr = (i%2) ? IR : OR; var X = CX + Math.cos(a)*rr, Y = CY + Math.sin(a)*rr; ctx[i ? 'lineTo' : 'moveTo'](X, Y); } ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 2; ctx.beginPath();
+    for (var i = 0; i < 10; i++) { var a = -Math.PI/2 + i*Math.PI/5; var rr = (i%2) ? IR : OR; var X = CX + Math.cos(a)*rr, Y = CY + Math.sin(a)*rr; ctx[i ? 'lineTo' : 'moveTo'](X, Y); } ctx.closePath(); ctx.stroke();
+  })();
+  ctx.fillStyle = '#fff3b0'; ctx.fillRect(o + 26, 4, 2, 2); ctx.fillRect(o + 5, 26, 2, 2);
+
+  // Tile 21: space floor — dark, flat, a few faint stars (walkable)
+  o = TILE * 21;
+  ctx.fillStyle = '#15182e'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.strokeStyle = '#23284a'; ctx.lineWidth = 1; ctx.strokeRect(o + 1, 1, TILE - 2, TILE - 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(o + 7, 9, 2, 2); ctx.fillRect(o + 23, 20, 1, 1); ctx.fillRect(o + 13, 25, 1, 1);
+  ctx.fillStyle = '#9fb4ff'; ctx.fillRect(o + 26, 7, 1, 1); ctx.fillRect(o + 5, 18, 1, 1);
+
+  // Tile 22: asteroid — grey cratered rock (blocks)
+  o = TILE * 22;
+  ctx.fillStyle = '#4a4a5e'; ctx.fillRect(o, 0, TILE, TILE);
+  ctx.fillStyle = '#5e5e72';
+  ctx.beginPath(); ctx.arc(o + 10, 12, 9, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 23, 21, 8, 0, 7); ctx.fill();
+  ctx.fillStyle = '#6e6e84';
+  ctx.beginPath(); ctx.arc(o + 23, 9, 5.5, 0, 7); ctx.fill();
+  ctx.fillStyle = '#3a3a4a';
+  ctx.beginPath(); ctx.arc(o + 9, 13, 2.5, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 24, 22, 2, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(o + 16, 18, 1.6, 0, 7); ctx.fill();
+  ctx.fillStyle = '#7a7a90'; ctx.globalAlpha = 0.5; ctx.fillRect(o, 0, TILE, 3); ctx.globalAlpha = 1;
+
+  // Tile 23: a glowing star in the dark of space (decoration)
+  o = TILE * 23;
+  ctx.fillStyle = '#15182e'; ctx.fillRect(o, 0, TILE, TILE);
+  var sg = ctx.createRadialGradient(o + 16, 16, 1, o + 16, 16, 13);
+  sg.addColorStop(0, '#fff3b0'); sg.addColorStop(1, 'rgba(255,243,176,0)');
+  ctx.fillStyle = sg; ctx.fillRect(o, 0, TILE, TILE);
+  (function () {
+    var CX = o + 16, CY = 16, OR = 7.5, IR = 3;
+    ctx.fillStyle = '#ffd23f'; ctx.beginPath();
+    for (var i = 0; i < 10; i++) { var a = -Math.PI/2 + i*Math.PI/5; var rr = (i%2) ? IR : OR; var X = CX + Math.cos(a)*rr, Y = CY + Math.sin(a)*rr; ctx[i ? 'lineTo' : 'moveTo'](X, Y); } ctx.closePath(); ctx.fill();
+  })();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(o + 6, 7, 1, 1); ctx.fillRect(o + 26, 24, 1, 1); ctx.fillRect(o + 24, 6, 1, 1);
+
   tc.refresh();
 
   // --- Upgrade the tiles to the SVG art (sprites-svg.js) ---
@@ -482,6 +543,16 @@ function create() {
   g.fillStyle(0xf2c9a1); g.fillCircle(12, 8, 6);
   g.fillStyle(0x222222); g.fillRect(9, 6, 2, 3); g.fillRect(13, 6, 2, 3);
   g.generateTexture('player', 24, 24);
+  g.clear();
+  // The SPACE SUIT (worn only in the space level)
+  g.fillStyle(0xaab4c2); g.fillRoundedRect(4, 10, 16, 13, 4);   // backpack behind
+  g.fillStyle(0xeef3f9); g.fillRoundedRect(6, 12, 12, 11, 4);   // suit body
+  g.fillStyle(0xf2f6fb); g.fillCircle(12, 8, 6.5);              // helmet
+  g.fillStyle(0x2a3550); g.fillCircle(12, 8, 4.6);              // visor
+  g.fillStyle(0x6bc5ff); g.fillEllipse(10.5, 7, 3, 2);          // visor glint
+  g.fillStyle(0xff6b6b); g.fillCircle(12, 17, 1.4);             // chest light
+  g.fillStyle(0x6bc5ff); g.fillCircle(9, 17, 1); g.fillCircle(15, 17, 1);
+  g.generateTexture('player-space', 24, 24);
   g.destroy();
 
   // --- Draw the item pickups ---
@@ -509,6 +580,14 @@ function create() {
   }), true);
   g.fillStyle(0xfff3b0); g.fillCircle(8, 7, 1.6);     // a glint
   g.generateTexture('item-star', 20, 20);
+  g.clear();
+  g.fillStyle(0xe8edf5); g.fillRoundedRect(7, 6, 8, 14, 4);     // the Spaceship body
+  g.fillStyle(0xff6b6b); g.fillTriangle(7, 9, 15, 9, 11, 0);    // nose cone
+  g.fillStyle(0x6bc5ff); g.fillCircle(11, 10, 2.2);             // window
+  g.fillStyle(0xc23a3a); g.fillTriangle(7, 15, 7, 21, 3, 21);   // fins
+  g.fillStyle(0xc23a3a); g.fillTriangle(15, 15, 15, 21, 19, 21);
+  g.fillStyle(0xffd23f); g.fillTriangle(8, 20, 14, 20, 11, 26); // flame
+  g.generateTexture('item-ship', 22, 26);
   g.clear();
   g.fillStyle(0xf8f4ec); g.fillCircle(10, 10, 7);     // the pearl
   g.lineStyle(2, 0xd8a8bc, 1); g.strokeCircle(10, 10, 7);
@@ -597,6 +676,15 @@ function create() {
   g.fillTriangle(13, 15, 18, 15, 13, 21);
   g.fillTriangle(13, 19, 17, 19, 12, 25);
   g.generateTexture('hazard-storm', 28, 26);
+  g.clear();
+  g.fillStyle(0x8e98aa); g.fillEllipse(14, 11, 26, 8);          // UFO saucer
+  g.fillStyle(0x6e7889); g.fillEllipse(14, 12, 18, 4);
+  g.fillStyle(0xbfc8d6); g.fillCircle(14, 7, 6);                // dome
+  g.fillStyle(0x6bc5ff); g.fillEllipse(14, 6, 7, 3);            // dome glass
+  g.fillStyle(0xffd23f); g.fillCircle(6, 11, 1.5);              // lights
+  g.fillStyle(0x9effa0); g.fillCircle(14, 13, 1.5);
+  g.fillStyle(0xff6b6b); g.fillCircle(22, 11, 1.5);
+  g.generateTexture('hazard-ship', 28, 18);
   g.destroy();
   g = this.add.graphics();
 
@@ -1088,7 +1176,7 @@ function loadLevel(scene, name, spawn, arriveKey) {
       updateInventoryLabel();
       showMessage(scene, `You picked up the ${item.name}!`);
       // The winning treasure! Let its sparkle play, then celebrate.
-      if (item.wins) scene.time.delayedCall(900, () => startVictory(scene));
+      if (item.wins) scene.time.delayedCall(900, () => startVictory(scene, item.victoryIntro));
     });
     itemSprites.push(sprite);
   });
@@ -1135,6 +1223,8 @@ function loadLevel(scene, name, spawn, arriveKey) {
   if (level.wizard) spawnWizard(scene, level, spawn);
 
   player.setPosition(spawn.col * TILE + TILE / 2, spawn.row * TILE + TILE / 2);
+  player.setTexture(level.playerTexture || 'player'); // the astronaut in space!
+  player.setVisible(true);
   scene.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
   scene.physics.world.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 
@@ -1314,6 +1404,10 @@ function worldFileSource(levelName, id, artName, snap) {
     17: 'soft sunlit cloud floor (walkable, high in the sky)',
     18: 'puffy white cumulus cloud bank',
     19: 'small golden star resting on the clouds',
+    20: 'OPEN doorway / archway (the game draws the closed door on top until it is unlocked)',
+    21: 'dark deep-space station floor (walkable), faint distant stars',
+    22: 'grey cratered asteroid rock wall',
+    23: 'a single glowing star in the dark of space',
   };
   const legend = usedTiles
     .map(t => `${CONTROL_COLORS[t]} = ${legendNames[t] || 'tile ' + t}`)
@@ -1377,7 +1471,7 @@ function openTile(scene, level, col, row, becomes) {
 //  tiles (5). tile.x / tile.y are the column / row.
 // ============================================================
 function handleDoorBump(scene, tile) {
-  if (tile.index !== 5 && tile.index !== 14 && tile.index !== 15 && tile.index !== 16) return;
+  if (tile.index !== 5 && tile.index !== 14 && tile.index !== 15 && tile.index !== 16 && tile.index !== 20) return;
 
   const level = LEVELS[currentLevelName];
   const key = `${tile.x},${tile.y}`;
@@ -1395,7 +1489,8 @@ function handleDoorBump(scene, tile) {
       lastLockedMsg = scene.time.now;
       // The door itself hints at what opens it.
       showMessage(scene,
-        tile.index === 16 ? 'A round, pearly socket shimmers in the door... what fits in there?'
+        tile.index === 20 ? 'A star-shaped socket gleams in the door... a star would fit it perfectly.'
+      : tile.index === 16 ? 'A round, pearly socket shimmers in the door... what fits in there?'
       : tile.index === 15 ? 'A gem-shaped hollow glints in the door... something precious would fit there.'
       : tile.index === 14 ? 'A golden keyhole... locked tight. There must be a key somewhere!'
       : "It's locked tight...");
@@ -1697,7 +1792,7 @@ function effectHeal(scene, x, y) {
 //  screen-space (scrollFactor 0), so it covers the full screen
 //  wherever the camera happens to be.
 // ============================================================
-function startVictory(scene) {
+function startVictory(scene, intro) {
   if (victoryActive) return;
   victoryActive = true;
 
@@ -1706,6 +1801,48 @@ function startVictory(scene) {
   clearChallengeMarker();
   endWizardSession();
 
+  if (intro === 'blastoff') playBlastoff(scene, () => showVictoryCelebration(scene));
+  else showVictoryCelebration(scene);
+}
+
+// The spaceship's flame roars, the astronaut climbs aboard, and
+// it rockets off the top of the screen — THEN the celebration.
+function playBlastoff(scene, onDone) {
+  const cam = scene.cameras.main;
+  const sx = player.x - cam.scrollX, sy = player.y - cam.scrollY;
+  player.setVisible(false);
+
+  const flame = scene.add.image(sx, sy + 22, 'fx-glow')
+    .setScrollFactor(0).setDepth(18).setTint(0xff9a3f).setAlpha(0).setScale(0.9);
+  const ship = scene.add.image(sx, sy, 'item-ship')
+    .setScrollFactor(0).setDepth(20).setScale(1.6);
+  const astro = scene.add.image(sx, sy - 16, 'player-space')
+    .setScrollFactor(0).setDepth(21).setScale(0.8);
+
+  showMessage(scene, 'Climb aboard — blast off! \uD83D\uDE80');
+
+  // The astronaut hops in (shrinks into the cockpit), then liftoff.
+  scene.tweens.add({
+    targets: astro, y: sy - 2, scale: 0.5, duration: 500, ease: 'Back.in',
+    onComplete: () => {
+      cam.shake(500, 0.006);
+      flame.setAlpha(1);
+      const trail = scene.time.addEvent({ delay: 45, repeat: 28, callback: () => {
+        const s = scene.add.image(ship.x + (Math.random() - 0.5) * 16, ship.y + 26, 'fx-star')
+          .setScrollFactor(0).setDepth(17).setTint(0xffd23f).setScale(0.5 + Math.random() * 0.5);
+        scene.tweens.add({ targets: s, alpha: 0, y: s.y + 24, duration: 500, onComplete: () => s.destroy() });
+      }});
+      scene.tweens.add({ targets: flame, scaleX: 1.5, scaleY: 2.6, duration: 600, yoyo: true, repeat: 1 });
+      scene.tweens.add({
+        targets: [ship, astro, flame], y: -150, duration: 1500, ease: 'Cubic.in',
+        onComplete: () => { ship.destroy(); astro.destroy(); flame.destroy(); trail.remove(); onDone(); },
+      });
+    },
+  });
+}
+
+// The full-screen party (used directly, or after the blastoff).
+function showVictoryCelebration(scene) {
   const w = scene.scale.width, h = scene.scale.height;
   const keep = o => { victoryObjects.push(o); return o; };
 

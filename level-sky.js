@@ -93,8 +93,10 @@ LEVELS['sky'] = {
   start: null,
   arrival: null,
   items: [
-    { id: 'star', name: 'Sky Star', texture: 'item-star', col: 0, row: 0,
-      wins: true },  // the FINAL treasure — collecting it wins the game!
+    // The star no longer ends the game — it opens the meadow's
+    // STAR GATE to outer space. The Spaceship (level-space.js)
+    // is the final treasure now.
+    { id: 'star', name: 'Sky Star', texture: 'item-star', col: 0, row: 0 }
   ],
   quiz: { doors: [], becomes: 17, min: 2, max: 9 },
   exits: {},

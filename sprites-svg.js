@@ -23,6 +23,7 @@
 //    8 window · 9 house door · 10 tree · 11 sand
 //    12 coral · 13 seaweed · 14 key door · 15 gem door
 //    16 pearl door · 17 cloud floor · 18 cloud bank · 19 star
+//    20 star door · 21 space floor · 22 asteroid · 23 space star
 // ============================================================
 window.SVG_TILES = {
 
@@ -311,6 +312,59 @@ window.SVG_TILES = {
     <ellipse cx="16" cy="25.5" rx="9.5" ry="3.5" fill="#ffffff"/>
     <polygon fill="#ffd23f" points="16,7.5 17.9,12.4 23.1,12.7 19.1,16 20.4,21.1 16,18.2 11.6,21.1 12.9,16 8.9,12.7 14.1,12.4"/>
     <circle cx="13.5" cy="11.5" r="1" fill="#fff3b0"/>
+  </svg>`,
+
+  // 20 — STAR door: dark metal with a star-shaped socket, the
+  // silhouette of the Sky Star, rimmed in gold
+  20: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#2b2f4a"/>
+    <g fill="#3c4266">
+      <rect x="1.5" y="1.5" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="17" y="1.5" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="1.5" y="17" width="13.5" height="13.5" rx="1.5"/>
+      <rect x="17" y="17" width="13.5" height="13.5" rx="1.5"/>
+    </g>
+    <polygon points="16,5 19,12.6 27,13 20.5,18 23,26 16,21.2 9,26 11.5,18 5,13 13,12.6" fill="#12152b"/>
+    <polygon points="16,5 19,12.6 27,13 20.5,18 23,26 16,21.2 9,26 11.5,18 5,13 13,12.6" fill="none" stroke="#ffd23f" stroke-width="1.6" stroke-linejoin="round"/>
+    <circle cx="26" cy="4.5" r="1.1" fill="#fff3b0"/>
+    <circle cx="5.5" cy="27" r="1.1" fill="#fff3b0"/>
+  </svg>`,
+
+  // 21 — space floor: dark, flat, a few faint distant stars
+  21: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#15182e"/>
+    <rect x="1" y="1" width="30" height="30" fill="none" stroke="#23284a" stroke-width="1"/>
+    <circle cx="8" cy="10" r="1" fill="#ffffff"/>
+    <circle cx="23" cy="21" r="0.8" fill="#ffffff"/>
+    <circle cx="14" cy="25" r="0.6" fill="#dfe6ff"/>
+    <circle cx="26" cy="7" r="0.7" fill="#9fb4ff"/>
+    <circle cx="5" cy="19" r="0.6" fill="#9fb4ff"/>
+  </svg>`,
+
+  // 22 — asteroid: grey cratered rock (the space walls)
+  22: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <rect width="32" height="32" fill="#4a4a5e"/>
+    <circle cx="10" cy="12" r="9" fill="#5e5e72"/>
+    <circle cx="23" cy="21" r="8" fill="#5e5e72"/>
+    <circle cx="23" cy="9" r="5.5" fill="#6e6e84"/>
+    <circle cx="9" cy="13" r="2.4" fill="#3a3a4a"/>
+    <circle cx="24" cy="22" r="2" fill="#3a3a4a"/>
+    <circle cx="16" cy="18" r="1.5" fill="#3a3a4a"/>
+    <rect width="32" height="2.5" fill="#7a7a90" opacity=".5"/>
+  </svg>`,
+
+  // 23 — a single glowing star in the dark of space
+  23: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+    <defs><radialGradient id="ss" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#fff3b0"/>
+      <stop offset="1" stop-color="#fff3b0" stop-opacity="0"/>
+    </radialGradient></defs>
+    <rect width="32" height="32" fill="#15182e"/>
+    <circle cx="16" cy="16" r="13" fill="url(#ss)"/>
+    <polygon fill="#ffd23f" points="16,8.5 17.6,13.4 22.7,13.6 18.6,16.6 20,21.5 16,18.5 12,21.5 13.4,16.6 9.3,13.6 14.4,13.4"/>
+    <circle cx="6" cy="7" r="0.8" fill="#ffffff"/>
+    <circle cx="26" cy="24" r="0.8" fill="#ffffff"/>
+    <circle cx="25" cy="6" r="0.6" fill="#ffffff"/>
   </svg>`,
 };
 
