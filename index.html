@@ -224,6 +224,10 @@ let layer = null, collider = null;
 let bgImage = null; // the painted world artwork, when a level has one
 let currentLevelName = null;
 let levelLabel, inventoryLabel, messageText, healthLabel;
+// The progress indicator: one icon per treasure, lit as you find it.
+const QUEST_ITEMS = ['key', 'gem', 'pearl', 'star', 'ship'];
+let progressIcons = [];
+let progressBg = null;
 let itemSprites = [];
 // The tile the player was on last frame. Exits fire only when
 // ENTERING a tile, so spawning on or near one can't re-trigger.
@@ -758,6 +762,7 @@ function create() {
 
   updateInventoryLabel();
   updateHealthLabel();
+  createProgress(this);
 
   // Whenever the screen size changes, re-anchor the HUD and
   // D-pad to the new edges.
@@ -1174,6 +1179,7 @@ function loadLevel(scene, name, spawn, arriveKey) {
       playCollectEffect(scene, item.id, sprite.x, sprite.y);
       sprite.destroy();
       updateInventoryLabel();
+      refreshProgress(scene);
       showMessage(scene, `You picked up the ${item.name}!`);
       // The winning treasure! Let its sparkle play, then celebrate.
       if (item.wins) scene.time.delayedCall(900, () => startVictory(scene, item.victoryIntro));
@@ -1234,6 +1240,7 @@ function loadLevel(scene, name, spawn, arriveKey) {
   refit();
 
   levelLabel.setText(level.name);
+  refreshProgress(scene);
   // The atmosphere veil: blue under the sea, and any level can
   // bring its own color (the sky uses warm sunlight).
   if (level.veil) {
@@ -1968,6 +1975,7 @@ function resetGame(scene) {
   state.health = MAX_HEALTH;
   updateInventoryLabel();
   updateHealthLabel();
+  refreshProgress(scene);
 
   Object.values(LEVELS).forEach(level => {
     level.map = null; // generate() (or a snapshot) will rebuild it
@@ -2047,6 +2055,7 @@ function layoutUI(scene) {
   healthLabel.setPosition(12, 42);
   inventoryLabel.setPosition(w - 12, 10);
   messageText.setPosition(w / 2, h - 36);
+  layoutProgress(scene);
 
   // The question banner: top-center, dropping below the corner
   // labels on narrow (portrait) screens.
@@ -2292,6 +2301,61 @@ function updateInventoryLabel() {
   inventoryLabel.setText(
     state.inventory.length ? 'Carrying: ' + state.inventory.join(', ') : ''
   );
+}
+
+// ===== The treasure progress row =====
+// Five icons (key, gem, pearl, star, spaceship). Each starts as
+// a dim silhouette and lights up — with a little pop — the moment
+// its treasure is collected, so a child can see the whole quest
+// at a glance and how far along they are.
+function createProgress(scene) {
+  progressBg = scene.add.rectangle(0, 0, 10, 10, 0x000000, 0.5)
+    .setScrollFactor(0).setDepth(10);
+  progressIcons = QUEST_ITEMS.map(id => {
+    const img = scene.add.image(0, 0, 'item-' + id)
+      .setScrollFactor(0).setDepth(11).setOrigin(0.5);
+    img.setScale(20 / img.height);     // normalise every icon to ~20px tall
+    img.setData('baseScale', img.scale);
+    img.setData('lit', false);
+    return img;
+  });
+  layoutProgress(scene);
+  refreshProgress(scene);
+}
+
+// Anchor the row at top-right, just under the inventory text.
+function layoutProgress(scene) {
+  if (!progressIcons.length) return;
+  const w = scene.scale.width;
+  const slot = 32, n = QUEST_ITEMS.length, rowY = 50;
+  const right = w - 12, left = right - n * slot;
+  progressIcons.forEach((img, i) => img.setPosition(left + (i + 0.5) * slot, rowY));
+  if (progressBg) { progressBg.setPosition((left + right) / 2, rowY); progressBg.setSize(n * slot + 10, 34); }
+}
+
+// Light the treasures already collected; dim the rest. A newly
+// collected one pops and flashes a gold ring.
+function refreshProgress(scene) {
+  const s = scene || gameScene;
+  progressIcons.forEach((img, i) => {
+    const have = state.inventory.includes(QUEST_ITEMS[i]);
+    if (have) {
+      img.clearTint(); img.setAlpha(1);
+      if (!img.getData('lit')) {
+        img.setData('lit', true);
+        if (s) {
+          const base = img.getData('baseScale');
+          s.tweens.add({ targets: img, scale: base * 1.7, duration: 200, yoyo: true, ease: 'Back.out' });
+          const ring = s.add.image(img.x, img.y, 'fx-glow')
+            .setScrollFactor(0).setDepth(10).setTint(0xffe08a).setScale(0.3).setAlpha(0.9);
+          s.tweens.add({ targets: ring, scale: 1.5, alpha: 0, duration: 520, onComplete: () => ring.destroy() });
+        }
+      }
+    } else {
+      img.setData('lit', false);
+      img.setTint(0x101018); img.setAlpha(0.4);   // a dim "not yet" silhouette
+    }
+  });
 }
 
 function showMessage(scene, text) {
