@@ -1179,6 +1179,7 @@ function loadLevel(scene, name, spawn, arriveKey) {
   // from the number grid above.
   if (bgImage) { bgImage.destroy(); bgImage = null; }
   if (level._art) attachWorldArt(scene, level, name, map);
+  else paintWorldArt(scene, level, name, map);
   // The third argument is a callback: the physics engine calls
   // it with the EXACT tile the player is bumping into. This is
   // how doors react to being walked into, not walked past.
@@ -1278,6 +1279,441 @@ function loadLevel(scene, name, spawn, arriveKey) {
   // Remember the tile we spawned on, so an exit can never fire
   // until the player has actually walked onto it.
   prevTileKey = `${spawn.col},${spawn.row}`;
+}
+
+// ============================================================
+//  THE PAINTER — procedural world artwork, no artist required.
+//
+//  When a level has no hand-painted image (the Shift+E flow),
+//  this painter reads the tile grid and paints one big painterly
+//  picture onto a canvas: soft light, rounded walls that cast
+//  real shadows, flowers, ripples, nebulas. The picture slides
+//  UNDER the tile layer exactly like imported artwork does, and
+//  the flat terrain tiles hide themselves. Doors, portals and
+//  the village houses stay visible on top — they're interactive
+//  or architectural, and crisp sprites suit them.
+//
+//  Painted once per level load (a few milliseconds), then it is
+//  a single static image: phones and tablets pay nothing per
+//  frame. Collision still comes from the number grid — this is
+//  beauty only, exactly like the imported-artwork system.
+// ============================================================
+
+// One deterministic random stream per world, seeded from the
+// map itself — the same world is always painted the same way,
+// so nothing shifts around between visits.
+function makePaintRng(grid) {
+  let seed = 2166136261;
+  for (const row of grid) for (const v of row) seed = Math.imul(seed ^ (v + 101), 16777619);
+  return function () {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// A rectangle with any mix of rounded corners. (The built-in
+// roundRect is too new for some tablets, so we trace our own.)
+function pathRounded(ctx, x, y, w, h, r) {
+  const [tl, tr, br, bl] = r;
+  ctx.beginPath();
+  ctx.moveTo(x + tl, y);
+  ctx.lineTo(x + w - tr, y); ctx.arcTo(x + w, y, x + w, y + tr, tr);
+  ctx.lineTo(x + w, y + h - br); ctx.arcTo(x + w, y + h, x + w - br, y + h, br);
+  ctx.lineTo(x + bl, y + h); ctx.arcTo(x, y + h, x, y + h - bl, bl);
+  ctx.lineTo(x, y + tl); ctx.arcTo(x, y, x + tl, y, tl);
+  ctx.closePath();
+}
+
+// A soft-edged blob: three fading rings (works everywhere, no
+// canvas filters needed).
+function softBlob(ctx, x, y, r, color, alpha) {
+  ctx.save();
+  ctx.fillStyle = color;
+  for (const [f, a] of [[1, 0.35], [0.72, 0.4], [0.45, 0.5]]) {
+    ctx.globalAlpha = alpha * a;
+    ctx.beginPath(); ctx.ellipse(x, y, r * f, r * f * 0.85, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function starPath(ctx, cx, cy, R, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    const rad = i % 2 ? r : R;
+    ctx[i ? 'lineTo' : 'moveTo'](cx + Math.cos(a) * rad, cy + Math.sin(a) * rad);
+  }
+  ctx.closePath();
+}
+
+function eachCell(grid, fn) {
+  for (let r = 0; r < grid.length; r++)
+    for (let c = 0; c < grid[r].length; c++) fn(c, r, grid[r][c]);
+}
+
+// A wall corner is rounded when BOTH of its neighbours are open
+// ground. Outside the map counts as wall, so borders stay flush.
+function wallCorners(grid, c, r, isWall, rad) {
+  const at = (cc, rr) =>
+    rr < 0 || rr >= grid.length || cc < 0 || cc >= grid[0].length || isWall(grid[rr][cc]);
+  return [
+    (!at(c - 1, r) && !at(c, r - 1)) ? rad : 0,
+    (!at(c + 1, r) && !at(c, r - 1)) ? rad : 0,
+    (!at(c + 1, r) && !at(c, r + 1)) ? rad : 0,
+    (!at(c - 1, r) && !at(c, r + 1)) ? rad : 0,
+  ];
+}
+
+// ---- How each WALL tile is painted, wherever it appears.
+//      (The meadow borrows cloud banks and asteroid rock for
+//      its sky and space gates, so styles live here, globally,
+//      not inside any one level's theme.)
+const WALL_STYLES = {
+  1:  { side: '#3b414b', top: '#68707e', hi: '#828d9c', shadow: 'rgba(0,0,0,0.35)' },        // stone
+  4:  { side: '#1b1f25', top: '#383d46', hi: '#4b515c', shadow: 'rgba(0,0,0,0.45)' },        // cave rock
+  12: { side: '#a83a52', top: '#e2607a', hi: '#f093a6', shadow: 'rgba(60,20,40,0.35)',       // coral reef
+        extra: coralBumps },
+  18: { side: '#9fbedd', top: '#f6fbff', hi: '#ffffff', shadow: 'rgba(90,130,180,0.30)',     // cloud bank
+        extra: cloudPuffs },
+  22: { side: '#241f2e', top: '#494258', hi: '#5f5872', shadow: 'rgba(0,0,0,0.50)',          // asteroid
+        extra: asteroidCraters },
+};
+
+// The village houses keep their crisp tiles, but the painter
+// still grounds them with a soft shadow on the grass.
+const SHADOW_ONLY = new Set([6, 7, 8, 9]);
+
+function asteroidCraters(ctx, x, y, rng) {
+  for (let i = 0, n = 1 + Math.floor(rng() * 2); i < n; i++) {
+    const cx = x + 8 + rng() * 16, cy = y + 6 + rng() * 15, cr = 2.5 + rng() * 3;
+    ctx.fillStyle = 'rgba(14,11,20,0.85)';
+    ctx.beginPath(); ctx.ellipse(cx, cy, cr, cr * 0.8, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(150,140,175,0.45)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, cr + 1, Math.PI * 0.9, Math.PI * 1.7); ctx.stroke();
+  }
+}
+function cloudPuffs(ctx, x, y, rng) {
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < 2; i++) {
+    ctx.beginPath();
+    ctx.ellipse(x + 7 + rng() * 18, y + 5 + rng() * 13, 5 + rng() * 5, 4 + rng() * 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+function coralBumps(ctx, x, y, rng) {
+  ctx.fillStyle = 'rgba(255,190,205,0.7)';
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.arc(x + 6 + rng() * 20, y + 5 + rng() * 14, 2 + rng() * 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ---- Decorations painted ON the ground (they block movement,
+//      so each keeps enough visual mass to read as "not a path").
+const DECOR_PAINTERS = { 10: paintTree, 13: paintSeaweed, 19: paintCloudStar, 23: paintSpaceStar };
+
+function paintTree(ctx, x, y, rng) {
+  const cx = x + 16 + (rng() * 4 - 2), cy = y + 15 + (rng() * 4 - 2);
+  softBlob(ctx, cx + 5, cy + 9, 15, '#0c2a12', 0.35);            // its pool of shade
+  ctx.fillStyle = '#38713a';                                     // the canopy...
+  for (const [dx, dy, r] of [[-6, 2, 10], [6, 1, 10], [0, -5, 11], [0, 4, 9]]) {
+    ctx.beginPath(); ctx.arc(cx + dx, cy + dy, r + rng() * 2, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = '#4f9447';                                     // ...catching light
+  for (const [dx, dy, r] of [[-5, -4, 6], [4, -6, 5], [-1, 1, 5]]) {
+    ctx.beginPath(); ctx.arc(cx + dx, cy + dy, r + rng() * 1.5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = '#66b25a';
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath(); ctx.arc(cx - 8 + rng() * 12, cy - 8 + rng() * 8, 1.6, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function paintSeaweed(ctx, x, y, rng) {
+  softBlob(ctx, x + 16, y + 22, 12, '#5a7a4a', 0.30);            // a mossy base patch
+  for (let i = 0; i < 5; i++) {
+    const sx = x + 6 + i * 5 + rng() * 3, sway = (rng() * 2 - 1) * 7;
+    ctx.strokeStyle = i % 2 ? '#3f8f5a' : '#5cae74';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, y + 30);
+    ctx.quadraticCurveTo(sx + sway, y + 18, sx - sway * 0.6, y + 8 - rng() * 5);
+    ctx.stroke();
+  }
+}
+
+function paintCloudStar(ctx, x, y, rng) {
+  softBlob(ctx, x + 16, y + 16, 13, '#ffdf70', 0.4);
+  ctx.fillStyle = '#ffd23f';
+  starPath(ctx, x + 16, y + 16, 8.5, 3.6); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1; ctx.stroke();
+}
+
+function paintSpaceStar(ctx, x, y, rng) {
+  softBlob(ctx, x + 16, y + 16, 14, '#9fd8ff', 0.45);
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(x + 16, y + 3); ctx.lineTo(x + 16, y + 29);
+  ctx.moveTo(x + 3, y + 16); ctx.lineTo(x + 29, y + 16);
+  ctx.stroke();
+  ctx.fillStyle = '#fff6d0';
+  starPath(ctx, x + 16, y + 16, 7, 2.8); ctx.fill();
+}
+
+// ---- Each level's mood: the base wash + the per-cell ground
+//      details. Walls and decorations come from the tables above.
+const WORLD_PAINTERS = {
+
+  home: {
+    base(ctx, W, H, rng) {
+      ctx.fillStyle = '#59985a'; ctx.fillRect(0, 0, W, H);
+      const g = ctx.createRadialGradient(W * 0.5, H * 0.4, 40, W * 0.5, H * 0.4, Math.max(W, H) * 0.75);
+      g.addColorStop(0, 'rgba(255,245,190,0.20)');               // warm sunlit middle
+      g.addColorStop(1, 'rgba(12,42,22,0.32)');                  // cool shaded edges
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      for (let i = 0, n = (W * H) / 9000; i < n; i++)            // mottled grass patches
+        softBlob(ctx, rng() * W, rng() * H, 26 + rng() * 44,
+                 rng() < 0.5 ? '#6fae66' : '#4a8250', 0.10);
+    },
+    detail(ctx, x, y, rng) {
+      ctx.lineWidth = 1;                                         // little grass blades
+      for (let i = 0; i < 3; i++) {
+        ctx.strokeStyle = rng() < 0.5 ? 'rgba(28,66,34,0.30)' : 'rgba(202,236,168,0.22)';
+        const bx = x + 3 + rng() * 26, by = y + 5 + rng() * 24;
+        ctx.beginPath(); ctx.moveTo(bx, by);
+        ctx.lineTo(bx + (rng() * 2 - 1) * 2, by - 3 - rng() * 3); ctx.stroke();
+      }
+      if (rng() < 0.10) {                                        // the occasional flower
+        const fx = x + 6 + rng() * 20, fy = y + 6 + rng() * 20;
+        ctx.fillStyle = ['#ffffff', '#ffd9e8', '#ffe98a', '#cfe0ff'][Math.floor(rng() * 4)];
+        for (let p = 0; p < 5; p++) {
+          const a = p * Math.PI * 2 / 5;
+          ctx.beginPath();
+          ctx.ellipse(fx + Math.cos(a) * 2.4, fy + Math.sin(a) * 2.4, 1.7, 1.7, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#e8b23f';
+        ctx.beginPath(); ctx.arc(fx, fy, 1.5, 0, Math.PI * 2); ctx.fill();
+      }
+    },
+  },
+
+  cave: {
+    base(ctx, W, H, rng) {
+      ctx.fillStyle = '#453c32'; ctx.fillRect(0, 0, W, H);
+      const g = ctx.createRadialGradient(W * 0.5, H * 0.45, 30, W * 0.5, H * 0.45, Math.max(W, H) * 0.7);
+      g.addColorStop(0, 'rgba(255,205,140,0.12)');               // torchlight in the middle
+      g.addColorStop(1, 'rgba(0,0,0,0.42)');                     // darkness at the edges
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      for (let i = 0, n = (W * H) / 10000; i < n; i++)
+        softBlob(ctx, rng() * W, rng() * H, 24 + rng() * 40,
+                 rng() < 0.5 ? '#3b332a' : '#544838', 0.12);
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = 1;   // hairline floor cracks
+      for (let i = 0; i < 12; i++) {
+        let cx = rng() * W, cy = rng() * H;
+        ctx.beginPath(); ctx.moveTo(cx, cy);
+        for (let s = 0; s < 4; s++) {
+          cx += (rng() * 2 - 1) * 26; cy += (rng() * 2 - 1) * 26;
+          ctx.lineTo(cx, cy);
+        }
+        ctx.stroke();
+      }
+    },
+    detail(ctx, x, y, rng) {
+      if (rng() < 0.55) {                                        // scattered pebbles
+        for (let i = 0, n = 1 + Math.floor(rng() * 2); i < n; i++) {
+          const px = x + 5 + rng() * 22, py = y + 5 + rng() * 22, pr = 1.5 + rng() * 2;
+          ctx.fillStyle = 'rgba(30,25,19,0.7)';
+          ctx.beginPath(); ctx.ellipse(px, py, pr, pr * 0.75, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = 'rgba(255,235,200,0.10)';
+          ctx.beginPath(); ctx.arc(px - pr * 0.3, py - pr * 0.3, pr * 0.45, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      if (rng() < 0.045) {                                       // a rare crystal cluster
+        const cx = x + 10 + rng() * 12, cy = y + 12 + rng() * 12;
+        softBlob(ctx, cx, cy, 11, '#4de0d8', 0.22);
+        ctx.fillStyle = '#7fe6e0';
+        for (let i = 0; i < 3; i++) {
+          const a = -Math.PI / 2 + (rng() * 2 - 1) * 0.9, len = 6 + rng() * 5, bx = cx + (rng() * 8 - 4);
+          ctx.beginPath();
+          ctx.moveTo(bx - 2.5, cy); ctx.lineTo(bx + 2.5, cy);
+          ctx.lineTo(bx + Math.cos(a) * len, cy + Math.sin(a) * len);
+          ctx.closePath(); ctx.fill();
+        }
+      }
+    },
+  },
+
+  sea: {
+    base(ctx, W, H, rng) {
+      ctx.fillStyle = '#d5c086'; ctx.fillRect(0, 0, W, H);
+      const g = ctx.createRadialGradient(W * 0.5, H * 0.35, 40, W * 0.5, H * 0.35, Math.max(W, H) * 0.8);
+      g.addColorStop(0, 'rgba(255,255,235,0.16)');               // sunlight through water
+      g.addColorStop(1, 'rgba(14,58,92,0.24)');                  // the deep blue distance
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      for (let i = 0, n = (W * H) / 9500; i < n; i++)
+        softBlob(ctx, rng() * W, rng() * H, 24 + rng() * 40,
+                 rng() < 0.5 ? '#c7b176' : '#e3d09a', 0.11);
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 2;
+      for (let i = 0; i < 18; i++) {                             // wobbly caustic rings
+        ctx.beginPath();
+        ctx.ellipse(rng() * W, rng() * H, 12 + rng() * 20, 6 + rng() * 10,
+                    rng() * Math.PI, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    },
+    detail(ctx, x, y, rng) {
+      if (rng() < 0.35) {                                        // sand ripples
+        ctx.strokeStyle = 'rgba(120,95,55,0.28)'; ctx.lineWidth = 1;
+        const ry = y + 8 + rng() * 18, rx = x + 4 + rng() * 8;
+        ctx.beginPath(); ctx.moveTo(rx, ry);
+        ctx.quadraticCurveTo(rx + 9, ry - 3 - rng() * 2, rx + 18, ry);
+        ctx.stroke();
+      }
+      if (rng() < 0.03) {                                        // a tiny shell
+        const sx = x + 8 + rng() * 16, sy = y + 8 + rng() * 16;
+        ctx.fillStyle = '#f2e3d5';
+        ctx.beginPath(); ctx.arc(sx, sy, 3, Math.PI, 0); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = 'rgba(150,110,90,0.6)'; ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx - 2, sy - 2.6);
+        ctx.moveTo(sx, sy); ctx.lineTo(sx, sy - 3);
+        ctx.moveTo(sx, sy); ctx.lineTo(sx + 2, sy - 2.6); ctx.stroke();
+      }
+    },
+  },
+
+  sky: {
+    base(ctx, W, H, rng) {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#b7d7f2'); g.addColorStop(1, '#eaf5ff'); // high blue fading to haze
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      softBlob(ctx, W * 0.22, H * 0.18, Math.min(W, H) * 0.3, '#fff2c0', 0.30); // the sun's warmth
+      for (let i = 0, n = (W * H) / 12000; i < n; i++)           // long drifting cloud streaks
+        softBlob(ctx, rng() * W, rng() * H, 30 + rng() * 40, '#ffffff', 0.10);
+    },
+    detail(ctx, x, y, rng) {
+      if (rng() < 0.5)                                           // walking on cotton
+        softBlob(ctx, x + 6 + rng() * 20, y + 6 + rng() * 20, 8 + rng() * 7, '#ffffff', 0.13);
+      if (rng() < 0.03) {                                        // a glint of high sunlight
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.beginPath(); ctx.arc(x + 8 + rng() * 16, y + 8 + rng() * 16, 1.2, 0, Math.PI * 2); ctx.fill();
+      }
+    },
+  },
+
+  space: {
+    base(ctx, W, H, rng) {
+      ctx.fillStyle = '#080614'; ctx.fillRect(0, 0, W, H);
+      const nebulas = ['#5a2a8a', '#1a4a7a', '#7a2a5a', '#2a6a5a'];
+      for (let i = 0; i < 4; i++)                                // distant nebulas
+        softBlob(ctx, rng() * W, rng() * H, 60 + rng() * 90, nebulas[i], 0.16);
+      for (let i = 0, n = (W * H) / 1600; i < n; i++) {          // the starfield
+        ctx.fillStyle = 'rgba(255,255,255,' + (0.25 + rng() * 0.65).toFixed(2) + ')';
+        const s = rng() < 0.85 ? 1 : 1.6;
+        ctx.fillRect(rng() * W, rng() * H, s, s);
+      }
+      for (let i = 0; i < 5; i++) {                              // a few heroes among them
+        const sx = rng() * W, sy = rng() * H;
+        softBlob(ctx, sx, sy, 6, '#cfe8ff', 0.5);
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(sx - 5, sy); ctx.lineTo(sx + 5, sy);
+        ctx.moveTo(sx, sy - 5); ctx.lineTo(sx, sy + 5); ctx.stroke();
+      }
+    },
+    detail(ctx, x, y, rng) {
+      if (rng() < 0.05) {                                        // faint dust in the play area
+        ctx.fillStyle = 'rgba(180,190,230,0.25)';
+        ctx.fillRect(x + rng() * 30, y + rng() * 30, 1, 1);
+      }
+    },
+  },
+};
+
+// Every tile the painter replaces. Anything NOT here (doors,
+// portals, the house) keeps its crisp sprite on top of the art.
+const PAINTED_BY_ART = new Set([0, 1, 3, 4, 10, 11, 12, 13, 17, 18, 19, 21, 22, 23]);
+
+function paintWorldArt(scene, level, name, map) {
+  const theme = WORLD_PAINTERS[name];
+  if (!theme || !level.map) return; // unknown level: classic tiles, no harm done
+
+  const W = map.widthInPixels, H = map.heightInPixels;
+  const key = 'painted-' + name;
+  if (scene.textures.exists(key)) scene.textures.remove(key);
+  const tex = scene.textures.createCanvas(key, W, H);
+  paintWorld(tex.context, level.map, theme, W, H);
+  // refresh() needs a real renderer — the headless test harness
+  // has none, and skipping it there is fine.
+  if (scene.sys.game.renderer) tex.refresh();
+
+  bgImage = scene.add.image(0, 0, key).setOrigin(0, 0).setDepth(0);
+  layer.setDepth(0.5);
+  layer.forEachTile(t => { t.visible = !PAINTED_BY_ART.has(t.index); });
+}
+
+function paintWorld(ctx, grid, theme, W, H) {
+  const rng = makePaintRng(grid);
+  const isWall = v => WALL_STYLES[v] !== undefined;
+
+  // 1) The land itself, edge to edge (doors sit on painted
+  //    ground too — so an opened door reveals real floor).
+  theme.base(ctx, W, H, rng);
+
+  // 2) Ground details, cell by cell.
+  eachCell(grid, (c, r, v) => {
+    if (!isWall(v) && !SHADOW_ONLY.has(v)) theme.detail(ctx, c * TILE, r * TILE, rng);
+  });
+
+  // 3) Soft shadows to ground the village houses (their crisp
+  //    tiles are drawn by the game, above this artwork).
+  ctx.fillStyle = 'rgba(0,0,0,0.20)';
+  eachCell(grid, (c, r, v) => {
+    if (!SHADOW_ONLY.has(v)) return;
+    pathRounded(ctx, c * TILE + 3, r * TILE + 6, TILE, TILE, [6, 6, 6, 6]);
+    ctx.fill();
+  });
+
+  // 4) The walls: each casts a real soft shadow, then gets a
+  //    darker flank, a lit top, and its own texture. Rows are
+  //    walked top to bottom so shadows never fall on a wall
+  //    drawn earlier.
+  eachCell(grid, (c, r, v) => {
+    const st = WALL_STYLES[v];
+    if (!st) return;
+    const corners = wallCorners(grid, c, r, isWall, 9);
+    const x = c * TILE - 0.5, y = r * TILE - 0.5, S = TILE + 1;
+
+    ctx.save();                                     // flank + its cast shadow
+    ctx.shadowColor = st.shadow;
+    ctx.shadowBlur = 9; ctx.shadowOffsetX = 3; ctx.shadowOffsetY = 6;
+    ctx.fillStyle = st.side;
+    pathRounded(ctx, x, y, S, S, corners); ctx.fill();
+    ctx.restore();
+
+    const below = r + 1 < grid.length && isWall(grid[r + 1][c]);
+    ctx.fillStyle = st.top;                         // the lit top surface —
+    pathRounded(ctx, x, y, S, below ? S : S - 6, corners); ctx.fill(); // shorter when its flank shows
+    ctx.fillStyle = 'rgba(0,0,0,' + (rng() * 0.07).toFixed(3) + ')';   // per-block tint variety
+    pathRounded(ctx, x, y, S, below ? S : S - 6, corners); ctx.fill();
+
+    const above = r > 0 && isWall(grid[r - 1][c]);
+    if (!above) {                                   // a bright lip where light lands
+      ctx.fillStyle = st.hi;
+      pathRounded(ctx, x + 4, y + 2.5, S - 8, 4, [3, 3, 3, 3]); ctx.fill();
+    }
+    if (st.extra) st.extra(ctx, c * TILE, r * TILE, rng);
+  });
+
+  // 5) Decorations last, so trees and seaweed overlap the world
+  //    organically instead of being clipped to their squares.
+  eachCell(grid, (c, r, v) => {
+    const d = DECOR_PAINTERS[v];
+    if (d) d(ctx, c * TILE, r * TILE, rng);
+  });
 }
 
 // ============================================================
