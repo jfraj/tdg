@@ -27,6 +27,8 @@ const CAVE_PORTAL_PAD = [[2, 3]];
 LEVELS['cave'] = {
 
   name: 'The Cave',
+  ambience: 'dust',                          // motes sinking in the dark
+  vignette: { color: 0x000000, alpha: 0.55 }, // deeper shadows underground
 
   generate: function () {
     for (let attempt = 0; attempt < 50; attempt++) {

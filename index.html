@@ -244,6 +244,8 @@ let knockback = { until: 0, vx: 0, vy: 0 };
 const touch = { up: false, down: false, left: false, right: false };
 let touchButtons = [];
 let waterOverlay; // the blue tint for underwater levels
+let vignette;         // the soft dark frame around the screen edges
+let ambience = null;  // the current level's particle mood (fireflies...)
 
 // Quiz display objects (rebuilt whenever a level loads)
 let quizDoorLabels = [];
@@ -743,6 +745,24 @@ function create() {
   waterOverlay = this.add.rectangle(0, 0, 800, 576, 0x1e5f9e, 0.22)
     .setOrigin(0).setScrollFactor(0).setDepth(5).setVisible(false);
 
+  // The vignette: a soft darkening around the screen edges, like
+  // modern games use to focus the eye on the middle. It's ONE
+  // tiny gradient texture drawn here, once, then stretched to
+  // whatever size the screen is — so it costs nothing per frame.
+  const vtex = this.textures.createCanvas('vignette', 256, 256);
+  const vg = vtex.context.createRadialGradient(128, 128, 70, 128, 128, 185);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(0.65, 'rgba(0,0,0,0.35)');
+  vg.addColorStop(1, 'rgba(0,0,0,1)');
+  vtex.context.fillStyle = vg;
+  vtex.context.fillRect(0, 0, 256, 256);
+  // refresh() needs a real renderer — the headless test harness
+  // has none, and would crash here. Skipping it there is fine:
+  // no pixels are drawn in tests anyway.
+  if (this.sys.game.renderer) vtex.refresh();
+  vignette = this.add.image(0, 0, 'vignette')
+    .setOrigin(0).setScrollFactor(0).setDepth(5.5).setAlpha(0.3);
+
   keys = this.input.keyboard.addKeys({
     up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT',
     w: 'W', a: 'A', s: 'S', d: 'D',
@@ -1140,6 +1160,7 @@ function loadLevel(scene, name, spawn, arriveKey) {
   hazardColliders.forEach(c => c.destroy());
   hazardColliders = [];
   if (wizardSprite) { wizardSprite.destroy(); wizardSprite = null; }
+  if (ambience) { ambience.destroy(); ambience = null; }
   endWizardSession();
   clearChallengeMarker();
   hazardHurtUntil = 0;
@@ -1250,6 +1271,8 @@ function loadLevel(scene, name, spawn, arriveKey) {
     waterOverlay.setFillStyle(0x1e5f9e, 0.22);
     waterOverlay.setVisible(!!level.water);
   }
+  applyVignette(level);
+  spawnAmbience(scene, level, map);
   scene.cameras.main.fadeIn(350);
 
   // Remember the tile we spawned on, so an exit can never fire
@@ -2065,6 +2088,7 @@ function layoutUI(scene) {
     questionBanner.setWordWrapWidth(narrow ? w - 16 : Math.min(520, w - 230));
   }
   if (waterOverlay) waterOverlay.setSize(w, h);
+  if (vignette) vignette.setDisplaySize(w, h);
 
   // The D-pad shrinks a little on narrow screens
   const s = Phaser.Math.Clamp(Math.min(w, h) / 430, 0.7, 1.15);
@@ -2095,6 +2119,96 @@ function updateTouchState(scene) {
       }
     }
   }
+}
+
+// ============================================================
+//  ATMOSPHERE — the vignette and the ambient particles.
+//
+//  Both are pure mood: they touch no gameplay, no collision,
+//  no questions. And both are cheap by construction — the
+//  vignette is a single stretched image, and each ambience
+//  keeps only ~15-25 tiny sprites alive, all drawn from the
+//  fx textures the game already has. Phones handle this fine.
+//
+//  A level opts in with one line:   ambience: 'fireflies'
+//  and can tune its frame with:     vignette: { color, alpha }
+//  or switch the frame off with:    vignette: false
+// ============================================================
+
+function applyVignette(level) {
+  if (!vignette) return;
+  if (level.vignette === false) { vignette.setVisible(false); return; }
+  const v = level.vignette || {};
+  vignette.setVisible(true);
+  vignette.setTint(v.color !== undefined ? v.color : 0x000000);
+  vignette.setAlpha(v.alpha !== undefined ? v.alpha : 0.3);
+}
+
+// Every preset is just a Phaser particle emitter recipe. The
+// alpha "values" arrays make each particle fade in, live, and
+// fade out — nothing ever pops into or out of existence.
+const AMBIENCE = {
+
+  // Warm little lights wandering over the meadow.
+  fireflies: {
+    texture: 'fx-glow', tint: 0xffe9a8,
+    lifespan: 4500, frequency: 280,
+    speed: { min: 5, max: 18 },
+    scale: { min: 0.25, max: 0.5 },
+    alpha: { values: [0, 0.9, 0.5, 0.9, 0] }, // a gentle blink
+  },
+
+  // Pale dust motes sinking through the cave air.
+  dust: {
+    texture: 'fx-glow', tint: 0xfff6e0,
+    lifespan: 6000, frequency: 320,
+    speedY: { min: 6, max: 14 }, speedX: { min: -4, max: 4 },
+    scale: { min: 0.12, max: 0.25 },
+    alpha: { values: [0, 0.45, 0] },
+  },
+
+  // Bubbles drifting up toward the surface.
+  bubbles: {
+    texture: 'fx-bubble',
+    lifespan: 5000, frequency: 340,
+    speedY: { min: -26, max: -10 }, speedX: { min: -6, max: 6 },
+    scale: { min: 0.4, max: 0.9 },
+    alpha: { values: [0, 0.7, 0] },
+  },
+
+  // Soft sunlit wisps carried sideways by the high wind.
+  breeze: {
+    texture: 'fx-glow', tint: 0xffffff,
+    lifespan: 5500, frequency: 300,
+    speedX: { min: 14, max: 34 }, speedY: { min: -4, max: 4 },
+    scale: { min: 0.3, max: 0.7 },
+    alpha: { values: [0, 0.35, 0] },
+  },
+
+  // Stars twinkling in place.
+  stars: {
+    texture: 'fx-star', tint: 0xdfe8ff,
+    lifespan: 2600, frequency: 150,
+    speed: 0,
+    scale: { min: 0.3, max: 0.7 },
+    alpha: { values: [0, 1, 0] }, // the twinkle itself
+  },
+};
+
+function spawnAmbience(scene, level, map) {
+  const preset = AMBIENCE[level.ambience];
+  if (!preset) return; // no ambience — perfectly fine
+
+  const { texture, tint, ...cfg } = preset;
+  ambience = scene.add.particles(0, 0, texture, {
+    ...cfg,
+    // Born anywhere on the map (world space, so they parallax
+    // naturally as the camera follows the player).
+    x: { min: 0, max: map.widthInPixels },
+    y: { min: 0, max: map.heightInPixels },
+  });
+  if (tint !== undefined) ambience.setParticleTint(tint);
+  ambience.setDepth(4); // above the world, below the veil + HUD
 }
 
 // ============================================================

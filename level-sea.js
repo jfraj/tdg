@@ -26,6 +26,7 @@ const SEA_PORTAL_PAD = [[2, 11]];
 LEVELS['sea'] = {
 
   name: 'Under the Sea',
+  ambience: 'bubbles',  // always rising, never arriving
   water: true,        // the blue underwater tint
   playerSpeed: 115,   // swimming is slower than walking
 

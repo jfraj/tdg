@@ -59,6 +59,7 @@ const MEADOW_SEA_GATE = [
 LEVELS['home'] = {
 
   name: 'The Meadow',
+  ambience: 'fireflies',  // warm little lights over the grass
 
   // The game always begins here (kept clear during generation).
   start: { col: 2, row: 2 },

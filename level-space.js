@@ -29,6 +29,8 @@ const SPACE_PORTAL_PAD = [[2, 21]];
 LEVELS['space'] = {
 
   name: 'Outer Space',
+  ambience: 'stars',                          // the twinkling void
+  vignette: { color: 0x05030f, alpha: 0.5 },  // space-black edges
   veil: { color: 0x1a0a3a, alpha: 0.12 },  // the deep-purple dark of space
   playerSpeed: 120,        // drifting in low gravity is slow
   playerTexture: 'player-space',  // the astronaut suit!

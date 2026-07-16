@@ -28,6 +28,8 @@ const SKY_PORTAL_PAD = [[2, 17]];
 LEVELS['sky'] = {
 
   name: 'The Sky',
+  ambience: 'breeze',                        // sunlit wisps on the wind
+  vignette: { color: 0x2a3a6a, alpha: 0.22 }, // a soft blue frame, not a dark one
   veil: { color: 0xfff3d1, alpha: 0.10 },  // warm sunlight up here
   playerSpeed: 140,   // walking on clouds is a little bouncy
 
