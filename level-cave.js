@@ -28,6 +28,10 @@ LEVELS['cave'] = {
 
   name: 'The Cave',
   ambience: 'dust',                          // motes sinking in the dark
+  lighting: {                                // real darkness down here:
+    ambient: 0x5a5a6a,                       // deep blue-grey beyond the light
+    player: { color: 0xffcf90, radius: 500000, intensity: 3.35 }, // your torch
+  },
   vignette: { color: 0x000000, alpha: 0.55 }, // deeper shadows underground
 
   generate: function () {

@@ -185,7 +185,15 @@ const config = {
     width: 800,
     height: 576,
   },
-  scene: { create, update },
+  // TWO scenes: the world below (which receives the cinematic
+  // camera effects) and the UI above (which must stay pin-sharp:
+  // questions and buttons are never blurred). They boot in this
+  // order so the HUD exists before the first level loads; the
+  // world then lifts the UI scene above itself for rendering.
+  scene: [
+    { key: 'ui', create: createUI },
+    { key: 'world', create: create, update: update, active: true },
+  ],
 };
 
 const game = new Phaser.Game(config);
@@ -243,6 +251,9 @@ let knockback = { until: 0, vx: 0, vy: 0 };
 // Touch D-pad (created only on touch devices)
 const touch = { up: false, down: false, left: false, right: false };
 let touchButtons = [];
+let uiScene = null;   // the always-sharp HUD scene (set in createUI)
+let playerLight = null;   // the torch that follows the player (lit levels)
+let glowLights = [];      // small lights on painted crystals and stars
 let waterOverlay; // the blue tint for underwater levels
 let vignette;         // the soft dark frame around the screen edges
 let ambience = null;  // the current level's particle mood (fireflies...)
@@ -283,11 +294,15 @@ let victoryTimers = [];    // the fireworks + confetti loops
 // ============================================================
 //  CREATE — runs once at startup
 // ============================================================
-function create() {
-  gameScene = this;
-
+// Every texture the game draws in code — tiles, player, items,
+// effects, creatures. Textures are GLOBAL (shared by all
+// scenes), but they must exist before anyone uses them: the UI
+// scene boots first, so it makes them for everyone. (This is
+// why the treasure row once showed green "missing texture"
+// squares — it was built before these existed.)
+function makeTextures(scene) {
   // --- Draw the 6 tiles in code ---
-  const tc = this.textures.createCanvas('tiles', TILE * 24, TILE);
+  const tc = scene.textures.createCanvas('tiles', TILE * 24, TILE);
   const ctx = tc.context;
 
   // Tile 0: grass
@@ -544,7 +559,7 @@ function create() {
   if (window.SvgTiles) SvgTiles.install(this, 'tiles', TILE);
 
   // --- Draw the player ---
-  let g = this.add.graphics();
+  let g = scene.add.graphics();
   g.fillStyle(0x3568b8); g.fillRoundedRect(4, 10, 16, 13, 4);
   g.fillStyle(0xf2c9a1); g.fillCircle(12, 8, 6);
   g.fillStyle(0x222222); g.fillRect(9, 6, 2, 3); g.fillRect(13, 6, 2, 3);
@@ -562,7 +577,7 @@ function create() {
   g.destroy();
 
   // --- Draw the item pickups ---
-  g = this.add.graphics();
+  g = scene.add.graphics();
   g.fillStyle(0xf5c542);
   g.fillCircle(7, 8, 5);
   g.fillStyle(0x1a1d23); g.fillCircle(7, 8, 2);
@@ -630,7 +645,7 @@ function create() {
 
   // --- Draw the dragon (all three look identical on purpose —
   //     only the numbers tell them apart!) ---
-  g = this.add.graphics();
+  g = scene.add.graphics();
   g.fillStyle(0x6a4fa3);                                   // wings
   g.fillTriangle(2, 14, 12, 4, 14, 16);
   g.fillTriangle(30, 14, 20, 4, 18, 16);
@@ -643,7 +658,7 @@ function create() {
   g.destroy();
 
   // --- The moving dangers: a bee, a bat, a jellyfish ---
-  g = this.add.graphics();
+  g = scene.add.graphics();
   g.fillStyle(0xffffff, 0.85);                              // bee wings
   g.fillEllipse(8, 4, 9, 6); g.fillEllipse(15, 4, 9, 6);
   g.fillStyle(0xffd23f); g.fillEllipse(11, 10, 16, 11);     // body
@@ -692,10 +707,10 @@ function create() {
   g.fillStyle(0xff6b6b); g.fillCircle(22, 11, 1.5);
   g.generateTexture('hazard-ship', 28, 18);
   g.destroy();
-  g = this.add.graphics();
+  g = scene.add.graphics();
 
   // --- The healing wizard ---
-  g = this.add.graphics();
+  g = scene.add.graphics();
   g.fillStyle(0x8a5a2b); g.fillRect(22, 13, 2.5, 19);       // staff
   g.fillStyle(0xffd23f); g.fillCircle(23, 11, 3);           // staff orb
   g.fillStyle(0x4256c5); g.fillRoundedRect(5, 19, 16, 14, 4); // robe
@@ -708,9 +723,14 @@ function create() {
   g.generateTexture('wizard', 26, 34);
   g.destroy();
 
-  player = this.physics.add.sprite(0, 0, 'player');
-  player.body.setSize(18, 18);
-  player.setDepth(1);
+}
+
+// The UI scene: everything the player READS or TAPS lives here,
+// floating above the world in its own scene so the cinematic
+// effects below can never blur it.
+function createUI() {
+  uiScene = this;
+  makeTextures(this); // before anything that renders
 
   // --- HUD text ---
   levelLabel = this.add.text(12, 10, '', {
@@ -763,6 +783,45 @@ function create() {
   vignette = this.add.image(0, 0, 'vignette')
     .setOrigin(0).setScrollFactor(0).setDepth(5.5).setAlpha(0.3);
 
+  // The sound toggle, tucked under the treasure row.
+  muteBtn = this.add.text(0, 0, '🔊', {
+    fontFamily: 'Helvetica, Arial', fontSize: '18px',
+    backgroundColor: '#00000066', padding: { x: 7, y: 4 },
+  }).setScrollFactor(0).setDepth(10).setOrigin(1, 0)
+    .setInteractive({ useHandCursor: true })
+    .on('pointerdown', toggleMute);
+
+  // Browsers unlock audio only after a real tap or key press,
+  // so the soundscape breathes in on the very first move. (And
+  // if the browser ever suspends it, any tap wakes it again.)
+  const wake = () => startAudio();
+  window.addEventListener('pointerdown', wake, { once: true });
+  window.addEventListener('keydown', wake, { once: true });
+  window.addEventListener('pointerdown', () => {
+    if (audio && audio.ctx.state === 'suspended') audio.ctx.resume();
+  });
+
+  // On phones and tablets, show the on-screen D-pad
+  if (this.sys.game.device.input.touch) createTouchControls(this);
+
+  updateInventoryLabel();
+  updateHealthLabel();
+  createProgress(this);
+
+  // Whenever the screen size changes, re-anchor the HUD and
+  // D-pad to the new edges.
+  this.scale.on('resize', () => layoutUI(this));
+  layoutUI(this);
+}
+
+function create() {
+  gameScene = this;
+  this.scene.bringToTop('ui'); // the HUD renders above the world
+
+  player = this.physics.add.sprite(0, 0, 'player');
+  player.body.setSize(18, 18);
+  player.setDepth(1);
+
   keys = this.input.keyboard.addKeys({
     up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT',
     w: 'W', a: 'A', s: 'S', d: 'D',
@@ -775,19 +834,23 @@ function create() {
     if (ev.shiftKey) exportWorld(this);
   });
 
-  // On phones and tablets, show the on-screen D-pad
-  if (this.sys.game.device.input.touch) createTouchControls(this);
-
   this.cameras.main.startFollow(player, true, 0.12, 0.12);
 
-  updateInventoryLabel();
-  updateHealthLabel();
-  createProgress(this);
-
-  // Whenever the screen size changes, re-anchor the HUD and
-  // D-pad to the new edges.
-  this.scale.on('resize', () => layoutUI(this));
-  layoutUI(this);
+  // --- The cinematic pass (WebGL only; Canvas devices simply
+  //     keep the classic look). Tilt-shift softens the top and
+  //     bottom of the view so the painted world reads like a
+  //     tiny handcrafted diorama; bloom lets bright things
+  //     truly glow. The HUD lives in its own scene above, so
+  //     none of this ever touches a question or a button.
+  if (this.sys.game.renderer && this.sys.game.renderer.pipelines) {
+    try {
+      const cam = this.cameras.main;
+      cam.postFX.addTiltShift(0.1, 1.0, 0.2, 1, 1, 0.8);
+      cam.postFX.addBloom(0xffffff, 1, 1, 1, 1.15, 4);
+    } catch (err) {
+      console.warn('Cinematic effects unavailable on this device:', err);
+    }
+  }
 
   loadLevel(this, STARTING_LEVEL, LEVELS[STARTING_LEVEL].start);
 }
@@ -1063,10 +1126,13 @@ function placeChallengeMarker(scene, type, level) {
     const cells = type === 'quiz' ? (ch && ch.doors) : (ch && ch.positions);
     if (!cells || !cells.length) { clearChallengeMarker(); return; }
     const mid = cells[Math.floor(cells.length / 2)];
-    // The quiz's middle door label is raised 24px, so the quiz
-    // marker sits higher to clear it; dragons have no raised label.
+    // Both clusters raise their MIDDLE label so long answers
+    // never overlap the side ones — so the marker must climb
+    // above that raised label, not sit on top of it. The
+    // dragons' label is raised higher (44px above their row)
+    // than the quiz doors' (8px), hence the bigger clearance.
     px = mid.col * TILE + TILE / 2;
-    py = mid.row * TILE - (type === 'quiz' ? 24 : 8);
+    py = mid.row * TILE - (type === 'quiz' ? 24 : 58);
   }
   setChallengeMarker(scene, type, px, py);
 }
@@ -1250,6 +1316,9 @@ function loadLevel(scene, name, spawn, arriveKey) {
   if (level.hazards) spawnHazards(scene, level, spawn);
   if (level.wizard) spawnWizard(scene, level, spawn);
 
+  // Lights on (or off) — now that every sprite of the level exists.
+  setupLighting(scene, level);
+
   player.setPosition(spawn.col * TILE + TILE / 2, spawn.row * TILE + TILE / 2);
   player.setTexture(level.playerTexture || 'player'); // the astronaut in space!
   player.setVisible(true);
@@ -1274,6 +1343,7 @@ function loadLevel(scene, name, spawn, arriveKey) {
   }
   applyVignette(level);
   spawnAmbience(scene, level, map);
+  setSoundscape(name);
   scene.cameras.main.fadeIn(350);
 
   // Remember the tile we spawned on, so an exit can never fire
@@ -1445,14 +1515,16 @@ function paintSeaweed(ctx, x, y, rng) {
   }
 }
 
-function paintCloudStar(ctx, x, y, rng) {
+function paintCloudStar(ctx, x, y, rng, glow) {
+  if (glow) glow.push({ x: x + 16, y: y + 16, color: 0xffd76a });
   softBlob(ctx, x + 16, y + 16, 13, '#ffdf70', 0.4);
   ctx.fillStyle = '#ffd23f';
   starPath(ctx, x + 16, y + 16, 8.5, 3.6); ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1; ctx.stroke();
 }
 
-function paintSpaceStar(ctx, x, y, rng) {
+function paintSpaceStar(ctx, x, y, rng, glow) {
+  if (glow) glow.push({ x: x + 16, y: y + 16, color: 0x9fd8ff });
   softBlob(ctx, x + 16, y + 16, 14, '#9fd8ff', 0.45);
   ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1.2;
   ctx.beginPath();
@@ -1502,12 +1574,16 @@ const WORLD_PAINTERS = {
   },
 
   cave: {
-    base(ctx, W, H, rng) {
+    base(ctx, W, H, rng, lit) {
       ctx.fillStyle = '#453c32'; ctx.fillRect(0, 0, W, H);
-      const g = ctx.createRadialGradient(W * 0.5, H * 0.45, 30, W * 0.5, H * 0.45, Math.max(W, H) * 0.7);
-      g.addColorStop(0, 'rgba(255,205,140,0.12)');               // torchlight in the middle
-      g.addColorStop(1, 'rgba(0,0,0,0.42)');                     // darkness at the edges
-      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      if (!lit) {
+        // No dynamic lighting on this device: bake a stand-in —
+        // a warm glow in the middle, darkness at the edges.
+        const g = ctx.createRadialGradient(W * 0.5, H * 0.45, 30, W * 0.5, H * 0.45, Math.max(W, H) * 0.7);
+        g.addColorStop(0, 'rgba(255,205,140,0.12)');
+        g.addColorStop(1, 'rgba(0,0,0,0.42)');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      }
       for (let i = 0, n = (W * H) / 10000; i < n; i++)
         softBlob(ctx, rng() * W, rng() * H, 24 + rng() * 40,
                  rng() < 0.5 ? '#3b332a' : '#544838', 0.12);
@@ -1522,7 +1598,7 @@ const WORLD_PAINTERS = {
         ctx.stroke();
       }
     },
-    detail(ctx, x, y, rng) {
+    detail(ctx, x, y, rng, glow) {
       if (rng() < 0.55) {                                        // scattered pebbles
         for (let i = 0, n = 1 + Math.floor(rng() * 2); i < n; i++) {
           const px = x + 5 + rng() * 22, py = y + 5 + rng() * 22, pr = 1.5 + rng() * 2;
@@ -1534,6 +1610,7 @@ const WORLD_PAINTERS = {
       }
       if (rng() < 0.045) {                                       // a rare crystal cluster
         const cx = x + 10 + rng() * 12, cy = y + 12 + rng() * 12;
+        if (glow) glow.push({ x: cx, y: cy, color: 0x5fe0d8 });
         softBlob(ctx, cx, cy, 11, '#4de0d8', 0.22);
         ctx.fillStyle = '#7fe6e0';
         for (let i = 0; i < 3; i++) {
@@ -1645,7 +1722,12 @@ function paintWorldArt(scene, level, name, map) {
   const key = 'painted-' + name;
   if (scene.textures.exists(key)) scene.textures.remove(key);
   const tex = scene.textures.createCanvas(key, W, H);
-  paintWorld(tex.context, level.map, theme, W, H);
+  // Will REAL dynamic lighting run here? Then the painter must
+  // not bake its own static light into the artwork — the two
+  // would fight, and the baked one (which never moves) wins the
+  // eye. Canvas-only devices keep the baked light as a stand-in.
+  const lit = !!(level.lighting && scene.sys.game.renderer && scene.sys.game.renderer.pipelines);
+  level._glow = paintWorld(tex.context, level.map, theme, W, H, lit);
   // refresh() needs a real renderer — the headless test harness
   // has none, and skipping it there is fine.
   if (scene.sys.game.renderer) tex.refresh();
@@ -1655,17 +1737,61 @@ function paintWorldArt(scene, level, name, map) {
   layer.forEachTile(t => { t.visible = !PAINTED_BY_ART.has(t.index); });
 }
 
-function paintWorld(ctx, grid, theme, W, H) {
+// ============================================================
+//  DYNAMIC LIGHTING — a warm torch around the player, real
+//  darkness beyond it, and small pools of light on whatever
+//  the painter said glows. WebGL only (Canvas devices simply
+//  see the level as it is); a level opts in with a `lighting`
+//  block. Text labels deliberately stay OUT of the lighting
+//  pipeline: answers must be readable even in the dark.
+// ============================================================
+function setupLighting(scene, level) {
+  // Sweep away the previous level's lights.
+  if (playerLight) { scene.lights.removeLight(playerLight); playerLight = null; }
+  glowLights.forEach(l => scene.lights.removeLight(l));
+  glowLights = [];
+
+  const webgl = scene.sys.game.renderer && scene.sys.game.renderer.pipelines;
+  if (webgl) player.resetPipeline(); // back to plain daylight by default
+
+  if (!level.lighting || !webgl) {
+    if (scene.lights && scene.lights.active) scene.lights.disable();
+    return;
+  }
+
+  const cfg = level.lighting;
+  scene.lights.enable().setAmbientColor(cfg.ambient !== undefined ? cfg.ambient : 0x50505e);
+
+  const p = cfg.player || {};
+  playerLight = scene.lights.addLight(player.x, player.y,
+    p.radius || 190, p.color !== undefined ? p.color : 0xffcf90, p.intensity || 1.3);
+  playerLight._base = p.intensity || 1.3; // for the torch flicker
+
+  // The brightest few painted glows become real lights.
+  (level._glow || []).slice(0, 6).forEach(g => {
+    glowLights.push(scene.lights.addLight(g.x, g.y, 120, g.color, 0.95));
+  });
+
+  // The WORLD steps into the light: the artwork, the tiles, and
+  // every living thing in the level.
+  [bgImage, layer, player, wizardSprite,
+   ...itemSprites, ...dragonSprites, ...hazardSprites]
+    .filter(Boolean).forEach(o => o.setPipeline('Light2D'));
+}
+
+function paintWorld(ctx, grid, theme, W, H, lit) {
   const rng = makePaintRng(grid);
   const isWall = v => WALL_STYLES[v] !== undefined;
+  const glow = []; // the painter remembers everything it paints
+                   // that GLOWS — dynamic lighting uses this.
 
   // 1) The land itself, edge to edge (doors sit on painted
   //    ground too — so an opened door reveals real floor).
-  theme.base(ctx, W, H, rng);
+  theme.base(ctx, W, H, rng, lit);
 
   // 2) Ground details, cell by cell.
   eachCell(grid, (c, r, v) => {
-    if (!isWall(v) && !SHADOW_ONLY.has(v)) theme.detail(ctx, c * TILE, r * TILE, rng);
+    if (!isWall(v) && !SHADOW_ONLY.has(v)) theme.detail(ctx, c * TILE, r * TILE, rng, glow);
   });
 
   // 3) Soft shadows to ground the village houses (their crisp
@@ -1712,8 +1838,10 @@ function paintWorld(ctx, grid, theme, W, H) {
   //    organically instead of being clipped to their squares.
   eachCell(grid, (c, r, v) => {
     const d = DECOR_PAINTERS[v];
-    if (d) d(ctx, c * TILE, r * TILE, rng);
+    if (d) d(ctx, c * TILE, r * TILE, rng, glow);
   });
+
+  return glow;
 }
 
 // ============================================================
@@ -1946,6 +2074,7 @@ function handleDoorBump(scene, tile) {
   const door = level.doors && level.doors[key];
   if (door) {
     if (state.inventory.includes(door.needs)) {
+      sfx('solve');
       openTile(scene, level, tile.x, tile.y, door.becomes);
       delete level.doors[key];
       showMessage(scene, door.message || 'The door unlocks!');
@@ -1975,6 +2104,7 @@ function handleDoorBump(scene, tile) {
 
   if (idx === quiz.correctIndex) {
     // Right answer! Open that one door, the quiz is done.
+    sfx('solve');
     openTile(scene, level, tile.x, tile.y, quiz.becomes);
     quiz.solved = true;
     clearChallengeMarker();
@@ -1984,6 +2114,7 @@ function handleDoorBump(scene, tile) {
   } else {
     // Wrong door: invent a NEW question (procedural!),
     // relabel the doors, and wait for the player to back off.
+    sfx('gentle');
     showMessage(scene, `${quiz.answers[idx]}? Not quite... here's a new one!`);
     newQuestion(quiz);
     refreshQuizDisplay(quiz);
@@ -2015,6 +2146,7 @@ function handleDragonTouch(scene, level, i, sprite) {
     openTile(scene, level, o.col, o.row, o.becomes);
     showMessage(scene, dragons.message || 'The good dragon bows — the way is open!');
     celebrateBanner(scene, dragons);
+    sfx('solve');
     sprite.setTint(0x9effa0); // it glows a friendly green
     dragonLabels[i].destroy();
     // ...and the evil dragons fly away
@@ -2202,6 +2334,7 @@ function orbTouched(scene, i) {
   if (wizardNeedsRetreat) return; // still standing on an orb after the last try
 
   if (i === wizardChallenge.correctIndex) {
+    sfx('heal');
     state.health = Math.min(MAX_HEALTH, state.health + 1);
     updateHealthLabel();
     effectHeal(scene, player.x, player.y);
@@ -2216,6 +2349,7 @@ function orbTouched(scene, i) {
       wizardNeedsRetreat = true; // step off the orb before the next answer
     }
   } else {
+    sfx('gentle');
     showMessage(scene, `${wizardChallenge.answers[i]}? Hmm, not quite — try this one!`);
     newQuestion(wizardChallenge, wizardBank);
     refreshWizardDisplay();
@@ -2311,6 +2445,7 @@ function playBlastoff(scene, onDone) {
 function showVictoryCelebration(scene) {
   const w = scene.scale.width, h = scene.scale.height;
   const keep = o => { victoryObjects.push(o); return o; };
+  const ui = uiScene || scene; // texts and the button stay sharp
 
   // The veil: night falls over the whole screen.
   const veil = keep(scene.add.rectangle(0, 0, w, h, 0x10142b, 0)
@@ -2318,7 +2453,7 @@ function showVictoryCelebration(scene) {
   scene.tweens.add({ targets: veil, fillAlpha: 0.62, duration: 700 });
 
   // The title bounces in...
-  const title = keep(scene.add.text(w / 2, h * 0.30, '🏆 You win! 🏆', {
+  const title = keep(ui.add.text(w / 2, h * 0.30, '🏆 You win! 🏆', {
     fontFamily: 'Helvetica, Arial', fontSize: '44px', fontStyle: 'bold',
     color: '#ffe9a8', stroke: '#5a3c10', strokeThickness: 8,
   }).setOrigin(0.5).setScrollFactor(0).setDepth(22).setScale(0));
@@ -2326,12 +2461,12 @@ function showVictoryCelebration(scene) {
 
   // ...with the three treasures of the journey beneath it...
   ['item-key', 'item-gem', 'item-pearl', 'item-star'].forEach((tex, i) => {
-    const t = keep(scene.add.image(w / 2 + (i - 1.5) * 52, h * 0.44, tex)
+    const t = keep(ui.add.image(w / 2 + (i - 1.5) * 52, h * 0.44, tex)
       .setScrollFactor(0).setDepth(22).setScale(0));
     scene.tweens.add({ targets: t, scale: 1.6, delay: 600 + i * 160, duration: 380, ease: 'Back.out' });
     scene.tweens.add({ targets: t, y: t.y - 6, delay: 1000, duration: 800 + i * 130, yoyo: true, repeat: -1 });
   });
-  const sub = keep(scene.add.text(w / 2, h * 0.53,
+  const sub = keep(ui.add.text(w / 2, h * 0.53,
     'The key, the gem, the pearl and the star are yours!', {
     fontFamily: 'Helvetica, Arial', fontSize: '17px',
     color: '#ffffff',
@@ -2339,7 +2474,7 @@ function showVictoryCelebration(scene) {
   scene.tweens.add({ targets: sub, alpha: 1, delay: 900, duration: 500 });
 
   // ...and the way to play again: a brand-new world.
-  const btn = keep(scene.add.text(w / 2, h * 0.65, '▶  Play a new world', {
+  const btn = keep(ui.add.text(w / 2, h * 0.65, '▶  Play a new world', {
     fontFamily: 'Helvetica, Arial', fontSize: '20px', fontStyle: 'bold',
     color: '#1b2a4a', backgroundColor: '#ffe9a8', padding: { x: 18, y: 10 },
   }).setOrigin(0.5).setScrollFactor(0).setDepth(22).setAlpha(0));
@@ -2348,7 +2483,7 @@ function showVictoryCelebration(scene) {
   btn.on('pointerover', () => btn.setBackgroundColor('#fff7d6'));
   btn.on('pointerout',  () => btn.setBackgroundColor('#ffe9a8'));
   btn.on('pointerdown', () => resetGame(scene));
-  const hint = keep(scene.add.text(w / 2, h * 0.65 + 34, '(or press Enter)', {
+  const hint = keep(ui.add.text(w / 2, h * 0.65 + 34, '(or press Enter)', {
     fontFamily: 'Helvetica, Arial', fontSize: '13px', color: '#c9d2e8',
   }).setOrigin(0.5).setScrollFactor(0).setDepth(22).setAlpha(0));
   scene.tweens.add({ targets: hint, alpha: 0.9, delay: 1500, duration: 400 });
@@ -2445,6 +2580,7 @@ function resetGame(scene) {
 }
 
 function loseHealth(scene, why) {
+  sfx('bump');
   state.health -= 1;
   updateHealthLabel();
   scene.cameras.main.shake(180, 0.006);
@@ -2525,6 +2661,7 @@ function layoutUI(scene) {
   }
   if (waterOverlay) waterOverlay.setSize(w, h);
   if (vignette) vignette.setDisplaySize(w, h);
+  if (muteBtn) muteBtn.setPosition(w - 12, 76); // under the treasure row
 
   // The D-pad shrinks a little on narrow screens
   const s = Phaser.Math.Clamp(Math.min(w, h) / 430, 0.7, 1.15);
@@ -2558,6 +2695,241 @@ function updateTouchState(scene) {
 }
 
 // ============================================================
+//  SOUND — a calm generative soundscape, synthesized live.
+//
+//  No audio files anywhere: every tone is made on the spot by
+//  the Web Audio API, the same way the painter makes the art.
+//  Each world hums its own gentle pad through a slowly
+//  breathing filter, plus its own sparse voice — bird-like
+//  chimes in the meadow, water drips in the cave, wave swells
+//  under the sea, wind in the sky, distant twinkles in space.
+//  Everything is pentatonic, so no two notes can ever clash:
+//  soothing by construction, for calm and concentration.
+//
+//  Browsers only allow sound after a real tap or key press, so
+//  the music breathes in on the player's very first move.
+// ============================================================
+let audio = null;        // { ctx, master, sfxGain, delay } once running
+let audioMuted = false;
+let muteBtn = null;      // the little 🔊 in the corner
+let scape = null;        // the running soundscape { name, out, stops, timers }
+let desiredScape = null; // which level's soundscape SHOULD be playing
+
+const MASTER_VOLUME = 0.14;
+
+const SOUNDSCAPES = {
+  home: {  // a warm summer field
+    pad: [130.81, 196.00, 329.63], wave: 'triangle', filter: 1400, padVol: 0.05,
+    chimes: [523.25, 587.33, 659.25, 783.99, 880.00], chimeEvery: [4, 9], chimeVol: 0.045, echo: 0.15,
+  },
+  cave: {  // deep, close, dripping
+    pad: [73.42, 110.00, 146.83], wave: 'sine', filter: 520, padVol: 0.07,
+    drip: true, chimeEvery: [5, 11], echo: 0.5,
+  },
+  sea: {   // slow water breathing
+    pad: [87.31, 130.81, 220.00], wave: 'sine', filter: 700, padVol: 0.06,
+    waves: true, chimes: [523.25, 659.25, 783.99], chimeEvery: [8, 14], chimeVol: 0.03, echo: 0.3,
+  },
+  sky: {   // bright air and wind
+    pad: [220.00, 329.63, 440.00], wave: 'triangle', filter: 2200, padVol: 0.035,
+    wind: true, chimes: [880.00, 987.77, 1108.73, 1318.51], chimeEvery: [5, 10], chimeVol: 0.035, echo: 0.3,
+  },
+  space: { // vast and still
+    pad: [65.41, 98.00, 130.81], wave: 'sine', filter: 420, padVol: 0.07,
+    chimes: [1046.50, 1174.66, 1318.51, 1567.98], chimeEvery: [6, 12], chimeVol: 0.03, echo: 0.6,
+  },
+};
+
+function startAudio() {
+  if (audio) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return; // a very old browser: the game simply stays quiet
+  const ctx = new AC();
+  const master = ctx.createGain();
+  master.gain.value = audioMuted ? 0 : MASTER_VOLUME;
+  master.connect(ctx.destination);
+  const sfxGain = ctx.createGain();
+  sfxGain.gain.value = 1;
+  sfxGain.connect(master);
+  // One soft shared echo: it turns lone notes into "a place".
+  const delay = ctx.createDelay(1);
+  delay.delayTime.value = 0.34;
+  const feedback = ctx.createGain(); feedback.gain.value = 0.3;
+  delay.connect(feedback); feedback.connect(delay);
+  const wet = ctx.createGain(); wet.gain.value = 0.5;
+  delay.connect(wet); wet.connect(master);
+  audio = { ctx, master, sfxGain, delay };
+  setSoundscape(desiredScape || currentLevelName);
+}
+
+function setSoundscape(name) {
+  desiredScape = name;
+  if (!audio) return;               // remembered; starts on first tap
+  if (scape && scape.name === name) return;
+  stopSoundscape();
+  const cfg = SOUNDSCAPES[name];
+  if (!cfg) return;                 // an unknown level plays silence
+  const ctx = audio.ctx;
+  const now = ctx.currentTime;
+
+  const out = ctx.createGain();     // this soundscape's own fader
+  out.gain.setValueAtTime(0, now);
+  out.gain.linearRampToValueAtTime(1, now + 4);  // a slow, calm breath in
+  out.connect(audio.master);
+
+  const stops = [], timers = [];
+
+  // --- The pad: six soft, slightly detuned voices through one
+  //     low-pass filter whose colour breathes very slowly.
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = cfg.filter;
+  filter.Q.value = 0.4;
+  filter.connect(out);
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 0.06;
+  const lfoAmt = ctx.createGain(); lfoAmt.gain.value = cfg.filter * 0.25;
+  lfo.connect(lfoAmt); lfoAmt.connect(filter.frequency); lfo.start();
+  stops.push(lfo);
+  cfg.pad.forEach((f, i) => {
+    for (const det of [-2.5, 2.5]) {   // two voices per note, a hair apart
+      const o = ctx.createOscillator();
+      o.type = cfg.wave; o.frequency.value = f; o.detune.value = det + i;
+      const g = ctx.createGain(); g.gain.value = cfg.padVol / 2;
+      o.connect(g); g.connect(filter); o.start();
+      stops.push(o);
+    }
+  });
+
+  // --- The wind / the waves: shaped noise, where a world has it.
+  if (cfg.wind || cfg.waves) {
+    const len = ctx.sampleRate * 2;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) {   // soft, deep "brown" noise
+      last = (last + (Math.random() * 2 - 1) * 0.02) * 0.98;
+      data[i] = last * 3;
+    }
+    const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = cfg.wind ? 850 : 420;
+    band.Q.value = 0.6;
+    const ng = ctx.createGain(); ng.gain.value = 0.05;
+    const swell = ctx.createOscillator(); swell.frequency.value = cfg.waves ? 0.07 : 0.05;
+    const swellAmt = ctx.createGain(); swellAmt.gain.value = 0.03;
+    swell.connect(swellAmt); swellAmt.connect(ng.gain); swell.start();
+    src.connect(band); band.connect(ng); ng.connect(out); src.start();
+    stops.push(src, swell);
+  }
+
+  scape = { name, out, stops, timers };
+
+  // --- The sparse voice: a chime (or a drip) now and then,
+  //     never on a beat, never twice the same.
+  const schedule = () => {
+    const [lo, hi] = cfg.chimeEvery;
+    const id = setTimeout(() => {
+      if (!audio || !scape || scape.name !== name) return;
+      if (cfg.drip) playDrip(out);
+      else playChime(cfg, out);
+      schedule();
+    }, (lo + Math.random() * (hi - lo)) * 1000);
+    timers.push(id);
+  };
+  schedule();
+}
+
+function stopSoundscape() {
+  if (!scape) return;
+  const old = scape; scape = null;
+  old.timers.forEach(clearTimeout);
+  old.out.gain.setTargetAtTime(0, audio.ctx.currentTime, 0.5); // breathe out...
+  setTimeout(() => {                  // ...then quietly leave the stage
+    old.stops.forEach(n => { try { n.stop(); } catch (e) {} });
+    old.out.disconnect();
+  }, 2500);
+}
+
+function playChime(cfg, out) {
+  const notes = cfg.chimes || [];
+  if (!notes.length) return;
+  const f = notes[Math.floor(Math.random() * notes.length)];
+  tone(f, { vol: cfg.chimeVol || 0.04, attack: 0.02, decay: 2.5, to: out, echo: cfg.echo });
+}
+
+function playDrip(out) {
+  const ctx = audio.ctx;
+  const t = ctx.currentTime;
+  const o = ctx.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(760 + Math.random() * 240, t); // "plink" —
+  o.frequency.linearRampToValueAtTime(240, t + 0.09);       // — falling fast
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.05, t);
+  g.gain.setTargetAtTime(0, t + 0.02, 0.05);
+  o.connect(g); g.connect(out); g.connect(audio.delay);     // echoes in the dark
+  o.start(t); o.stop(t + 0.6);
+}
+
+// One synthesized tone: the building block of chimes and effects.
+function tone(freq, opt) {
+  if (!audio) return;
+  const ctx = audio.ctx;
+  const t = ctx.currentTime + (opt.at || 0);
+  const attack = opt.attack || 0.02;
+  const decay = opt.decay || 1;
+  const o = ctx.createOscillator();
+  o.type = opt.wave || 'sine';
+  o.frequency.value = freq;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(opt.vol, t + attack);
+  g.gain.setTargetAtTime(0, t + attack, decay / 4);
+  o.connect(g);
+  g.connect(opt.to || audio.sfxGain);
+  if (opt.echo) {
+    const e = ctx.createGain(); e.gain.value = opt.echo;
+    g.connect(e); e.connect(audio.delay);
+  }
+  o.start(t); o.stop(t + decay + 0.5);
+}
+
+// The game's few, deliberately gentle feedback sounds. Nothing
+// here is ever loud, harsh, or discouraging.
+function sfx(name) {
+  if (!audio) return;
+  switch (name) {
+    case 'collect':      // a bright little "got it!"
+      tone(659.25, { vol: 0.06, decay: 0.5 });
+      tone(783.99, { vol: 0.06, decay: 0.9, at: 0.09 });
+      break;
+    case 'solve':        // a door opens: three rising notes of welcome
+      tone(392.00, { vol: 0.055, decay: 0.7 });
+      tone(523.25, { vol: 0.055, decay: 0.9, at: 0.12 });
+      tone(659.25, { vol: 0.055, decay: 1.4, at: 0.24, echo: 0.3 });
+      break;
+    case 'heal':         // a warm chord blooming open
+      [261.63, 329.63, 392.00].forEach(f =>
+        tone(f, { vol: 0.04, attack: 0.3, decay: 1.6, wave: 'triangle' }));
+      break;
+    case 'gentle':       // "not quite" — soft, thoughtful, never scary
+      tone(233.08, { vol: 0.045, decay: 0.5, wave: 'triangle' });
+      break;
+    case 'bump':         // an "oof" — low and brief, more felt than heard
+      tone(174.61, { vol: 0.05, decay: 0.35, wave: 'triangle' });
+      break;
+  }
+}
+
+function toggleMute() {
+  audioMuted = !audioMuted;
+  if (muteBtn) muteBtn.setText(audioMuted ? '🔇' : '🔊');
+  if (audio) audio.master.gain.setTargetAtTime(
+    audioMuted ? 0 : MASTER_VOLUME, audio.ctx.currentTime, 0.05);
+}
+
+// ============================================================
 //  ATMOSPHERE — the vignette and the ambient particles.
 //
 //  Both are pure mood: they touch no gameplay, no collision,
@@ -2577,7 +2949,11 @@ function applyVignette(level) {
   const v = level.vignette || {};
   vignette.setVisible(true);
   vignette.setTint(v.color !== undefined ? v.color : 0x000000);
-  vignette.setAlpha(v.alpha !== undefined ? v.alpha : 0.3);
+  let a = v.alpha !== undefined ? v.alpha : 0.3;
+  // With a real torch lit, the darkness is the lighting's job —
+  // a heavy static vignette would mimic it and steal the show.
+  if (playerLight) a = Math.min(a, 0.25);
+  vignette.setAlpha(a);
 }
 
 // Every preset is just a Phaser particle emitter recipe. The
@@ -2654,6 +3030,7 @@ function spawnAmbience(scene, level, map) {
 //  (Depth 6: above the world and the water veil, below the HUD.)
 // ============================================================
 function playCollectEffect(scene, id, x, y) {
+  sfx('collect');
   if (id === 'gem') effectCrystalShatter(scene, x, y);
   else if (id === 'pearl') effectPearlBubbles(scene, x, y);
   else if (id === 'star') effectRainbowBurst(scene, x, y);
@@ -2780,6 +3157,13 @@ function effectPearlBubbles(scene, x, y) {
 //  UPDATE — runs ~60 times per second
 // ============================================================
 function update() {
+  // The torch stays in the player's hand, breathing slightly.
+  if (playerLight) {
+    playerLight.x = player.x;
+    playerLight.y = player.y;
+    playerLight.intensity = playerLight._base + Math.sin(this.time.now * 0.008) * 0.07;
+  }
+
   if (victoryActive) { player.setVelocity(0, 0); return; } // the game is won!
   updateTouchState(this);
 
@@ -2886,7 +3270,9 @@ function layoutProgress(scene) {
 // Light the treasures already collected; dim the rest. A newly
 // collected one pops and flashes a gold ring.
 function refreshProgress(scene) {
-  const s = scene || gameScene;
+  // The pop and the glow ring belong to the HUD, so they play
+  // in the UI scene: sharp, and above everything.
+  const s = uiScene || scene || gameScene;
   progressIcons.forEach((img, i) => {
     const have = state.inventory.includes(QUEST_ITEMS[i]);
     if (have) {
