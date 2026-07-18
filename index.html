@@ -650,6 +650,24 @@ function makeTextures(scene) {
   g.clear();
   g.fillStyle(0xffffff); g.fillRect(0, 0, 6, 10); // a confetti piece
   g.generateTexture('fx-confetti', 6, 10);
+
+  // fx-rim: a soft rounded RIM of light that hugs a tile's
+  // edges — drawn white, tinted per challenge. Three passes,
+  // wide-and-faint to thin-and-bright, give it a gentle glow
+  // falloff on both sides of the line.
+  const rim = scene.textures.createCanvas('fx-rim', 56, 56);
+  const rctx = rim.context;
+  for (const [lw, blur, a] of [[5, 9, 0.30], [3, 5, 0.5], [1.5, 2.5, 0.95]]) {
+    rctx.save();
+    rctx.shadowColor = 'rgba(255,255,255,' + a + ')';
+    rctx.shadowBlur = blur;
+    rctx.strokeStyle = 'rgba(255,255,255,' + a + ')';
+    rctx.lineWidth = lw;
+    pathRounded(rctx, 11, 11, 34, 34, [9, 9, 9, 9]);
+    rctx.stroke();
+    rctx.restore();
+  }
+  if (scene.sys.game.renderer) rim.refresh();
   g.destroy();
 
   // --- Draw the dragon (all three look identical on purpose —
@@ -1446,10 +1464,10 @@ function setChallengeMarker(scene, type, px, py, spots) {
   // behind the question card: they pulse together, and that
   // shared rhythm IS the link between question and place.
   challengeGlows = (spots || [{ x: px, y: py }]).map(p =>
-    scene.add.image(p.x, p.y, 'fx-glow')
+    scene.add.image(p.x, p.y, 'fx-rim')
       .setDepth(1.6).setTint(col)
       .setBlendMode(Phaser.BlendModes.ADD)
-      .setScale(2.2).setAlpha(0.5));
+      .setAlpha(0.4));
   challengeMarker = { x: px, y: py, baseY: py }; // the tether's anchor
   currentMarkerType = type;
 }
@@ -3526,10 +3544,10 @@ function update() {
   // together — one rhythm, one colour, one meaning.
   if (challengeGlows.length) {
     const pulse = 0.5 + 0.5 * Math.sin(this.time.now * 0.003);
-    const a = 0.28 + 0.42 * pulse, sc = 2.05 + 0.35 * pulse;
+    const a = 0.22 + 0.34 * pulse, sc = 0.98 + 0.07 * pulse;
     challengeGlows.forEach(g => g.setAlpha(a).setScale(sc));
     if (cardGlow && questionBanner && questionBanner.visible)
-      cardGlow.setAlpha(0.07 + 0.13 * pulse);
+      cardGlow.setAlpha(0.05 + 0.10 * pulse);
   } else if (cardGlow) cardGlow.setAlpha(0);
 
   // The torch stays in the player's hand, breathing slightly.
