@@ -266,6 +266,7 @@ let bannerState = null;  // what the card currently shows (for re-layout)
 let bannerSlot = 'top';  // which edge the card calls home right now
 let bannerDodgeAt = 0;   // throttle for the get-out-of-the-way check
 let cardGlow = null;     // the halo behind the card (breathes with the doors)
+let bannerProxAlpha = 0; // how present the card is (fades with distance)
 let gameScene = null;        // set in create(): lets banner helpers reach the scene
 let challengeMarker = null;  // the challenge's anchor point (the card dodges around it)
 let challengeGlows = [];     // soft breathing light ON the doors/dragons/wizard
@@ -1336,10 +1337,19 @@ function renderBanner(opts, relayout) {
 
   questionBanner.setX(w / 2);
   questionBanner.setY(bannerSlotY(bannerSlot));
-  questionBanner.setVisible(true);
-  if (!relayout) {
-    questionBanner.setScale(0.96); questionBanner.setAlpha(0.8);
-    uiScene.tweens.add({ targets: questionBanner, scale: 1, alpha: 1,
+  if (opts.prox) {
+    // Distance decides how present the question is (see the
+    // proximity fade in update) — no flash when it's far away.
+    questionBanner.setAlpha(bannerProxAlpha);
+    questionBanner.setVisible(bannerProxAlpha > 0.02);
+  } else {
+    bannerProxAlpha = 1; // feedback (✔, level notes) shows at once
+    questionBanner.setAlpha(1);
+    questionBanner.setVisible(true);
+  }
+  if (!relayout && questionBanner.visible) {
+    questionBanner.setScale(0.96);
+    uiScene.tweens.add({ targets: questionBanner, scale: 1,
                          duration: 160, ease: 'Sine.out' });
   }
 }
@@ -1354,6 +1364,25 @@ function bannerSlotY(slot) {
   const s = Phaser.Math.Clamp(Math.min(w, h) / 430, 0.7, 1.15);
   const reserve = touchButtons.length ? 208 * s : 58;
   return Math.max(90, h - bh - reserve);
+}
+
+// The question is company, not signage: a challenge card fades
+// in as the player approaches its doors / dragons / wizard, and
+// breathes out again when they wander off. Feedback cards (the
+// ✔ moment) and an open wizard session stay present — they
+// answer something the player just did.
+function updateBannerProximity(scene) {
+  if (!questionBanner || !bannerState) return;
+  let target = 1;
+  if (bannerState.prox) {
+    const near = challengeMarker && Phaser.Math.Distance.Between(
+      player.x, player.y, challengeMarker.x, challengeMarker.baseY) < 190;
+    target = (near || wizardActive) ? 1 : 0;
+  }
+  bannerProxAlpha += (target - bannerProxAlpha) * 0.14;
+  if (target === 0 && bannerProxAlpha < 0.02) bannerProxAlpha = 0;
+  questionBanner.setAlpha(Math.min(1, bannerProxAlpha));
+  questionBanner.setVisible(bannerProxAlpha > 0.02);
 }
 
 // Twice a second: would the card hide the player, or the thing
@@ -1401,6 +1430,7 @@ function showChallengeBanner(type, question) {
     title: `${s.icon}  ${s.action.toUpperCase()}`,
     text: `${star}${question}`,
     bg: s.bg, accent: s.accent,
+    prox: true, // the question waits until the player draws near
   });
 }
 
@@ -3490,6 +3520,7 @@ function effectPearlBubbles(scene, x, y) {
 //  UPDATE — runs ~60 times per second
 // ============================================================
 function update() {
+  updateBannerProximity(this); // the question arrives when the player does
   updateBannerDodge(this); // the card steps aside for the player
 
   // The heartbeat: the challenge and the question card breathe
