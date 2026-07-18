@@ -260,9 +260,18 @@ let ambience = null;  // the current level's particle mood (fireflies...)
 
 // Quiz display objects (rebuilt whenever a level loads)
 let quizDoorLabels = [];
-let questionBanner; // the current question, shown at the top of the screen
+let questionBanner;   // the question CARD (a container in the UI scene)
+let bannerPanel, bannerTitle, bannerQuestion; // the card's parts
+let bannerState = null;  // what the card currently shows (for re-layout)
+let bannerSlot = 'top';  // which edge the card calls home right now
+let bannerDodgeAt = 0;   // throttle for the get-out-of-the-way check
+let bannerTether = null; // the dotted beam linking card -> challenge
+let cardGlow = null;     // the halo behind the card (breathes with the doors)
+let tetherAlpha = 0;     // how visible the beam currently is
+let tetherBoostUntil = 0;// new question: show the link for a moment
 let gameScene = null;        // set in create(): lets banner helpers reach the scene
-let challengeMarker = null;  // the bobbing icon hovering over the active challenge
+let challengeMarker = null;  // the tether's anchor { x, y, baseY } on the challenge
+let challengeGlows = [];     // soft breathing light ON the doors/dragons/wizard
 let currentMarkerType = null;
 // After a wrong answer, the player must stop pushing on the
 // doors for a moment before the next attempt counts (prevents
@@ -754,11 +763,25 @@ function createUI() {
   }).setScrollFactor(0).setDepth(10).setOrigin(0.5).setAlpha(0);
 
   // The question banner, top-center of the screen.
-  questionBanner = this.add.text(400, 10, '', {
-    fontFamily: 'Helvetica, Arial', fontSize: '15px', fontStyle: 'bold',
-    color: '#ffffff', backgroundColor: '#1b2a4ae6', padding: { x: 12, y: 6 },
-    align: 'center', wordWrap: { width: 480 },
-  }).setScrollFactor(0).setDepth(11).setOrigin(0.5, 0).setVisible(false);
+  // The question card: built like a little painting — panel,
+  // title, question — grouped so it can glide as one.
+  questionBanner = this.add.container(400, 10).setDepth(11);
+  cardGlow = this.add.image(0, 0, 'fx-glow')
+    .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0).setVisible(false);
+  questionBanner.add(cardGlow); // behind the panel: the card's halo
+  bannerPanel = this.add.image(0, 0, '__WHITE').setOrigin(0.5, 0).setVisible(false);
+  bannerTitle = this.add.text(0, 0, '', {
+    fontFamily: "'Trebuchet MS', 'Segoe UI', Helvetica, sans-serif",
+    fontSize: '12px', fontStyle: 'bold', align: 'center',
+  }).setOrigin(0.5, 0);
+  bannerQuestion = this.add.text(0, 0, '', {
+    fontFamily: "'Trebuchet MS', 'Segoe UI', Helvetica, sans-serif",
+    fontSize: '17px', fontStyle: 'bold', color: '#ffffff', align: 'center',
+    wordWrap: { width: 520, useAdvancedWrap: true },
+  }).setOrigin(0.5, 0).setShadow(0, 2, '#00000088', 3);
+  questionBanner.add([bannerPanel, bannerTitle, bannerQuestion]);
+  questionBanner.setVisible(false);
+  bannerTether = this.add.graphics().setDepth(10.5); // the card's beam
 
   // A translucent blue veil for underwater levels (above the
   // world at depth 5, below the HUD at depth 10+).
@@ -993,8 +1016,124 @@ function makeBank(raw) {
 const questionBank = makeBank(window.QUESTIONS);
 const wizardBank = makeBank(window.WIZARD_QUESTIONS);
 
+// ============================================================
+//  THE PRACTICE POUCH — spaced repetition, child-sized.
+//
+//  Every missed question slips quietly into the pouch. It comes
+//  back a little later (never immediately — that's just
+//  retrying), wearing a small ⭐ on the banner so the comeback
+//  is honest but friendly. Answer it right and its next visit
+//  is twice as far away; answer it right twice in a row and it
+//  GRADUATES — stars around the player, a proud flourish, and
+//  a word from the wizard if he's nearby. Miss it again and it
+//  returns sooner, patient as ever.
+//
+//  The pouch sleeps in the browser (localStorage), so a verb
+//  missed on Tuesday can resurface on Thursday: yesterday's
+//  tricky questions greet the next session early. Questions
+//  remember their "subject" — wizard questions return at the
+//  wizard, door/dragon questions at doors and dragons.
+// ============================================================
+let pouch = [];           // { q, a, wrongs, source, misses, streak, gap, dueAt }
+let questionsAsked = 0;   // the clock the pouch schedules against
+const POUCH_KEY = 'tdg-practice-pouch';
+const FIRST_GAP = 3;      // first comeback: after ~3 other questions
+const RETRY_GAP = 2;      // missed again: return sooner
+const GRADUATE_STREAK = 2;// two correct comebacks in a row = mastered
+
+function loadPouch() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(POUCH_KEY) || '[]');
+    // Last session's tricky ones surface early today, gently
+    // staggered so they don't all arrive at once.
+    pouch = saved.map((e, i) => ({ ...e, gap: FIRST_GAP, dueAt: i * 2 + 1 }));
+  } catch (e) { pouch = []; }
+}
+
+function savePouch() {
+  try {
+    localStorage.setItem(POUCH_KEY, JSON.stringify(
+      pouch.map(({ q, a, wrongs, source, misses, streak }) =>
+        ({ q, a, wrongs, source, misses, streak }))));
+  } catch (e) {} // private browsing etc.: practice lives for this session only
+}
+
+function pouchRecordMiss(ch) {
+  if (!ch.question || !ch.correct) return;
+  const wrongs = (ch.answers || []).filter(ans => ans !== ch.correct);
+  const existing = pouch.find(e => e.q === ch.question && e.source === ch._source);
+  if (existing) {
+    existing.misses++;
+    existing.streak = 0;
+    existing.gap = FIRST_GAP;
+    existing.dueAt = questionsAsked + RETRY_GAP;
+  } else if (wrongs.length >= 2) {
+    pouch.push({ q: ch.question, a: ch.correct, wrongs, source: ch._source,
+                 misses: 1, streak: 0, gap: FIRST_GAP,
+                 dueAt: questionsAsked + FIRST_GAP });
+  }
+  savePouch();
+}
+
+function pouchRecordWin(scene, ch) {
+  if (!ch._comeback) return;
+  ch._comeback = false;
+  const e = pouch.find(x => x.q === ch.question && x.source === ch._source);
+  if (!e) return;
+  e.streak++;
+  if (e.streak >= GRADUATE_STREAK) {
+    pouch = pouch.filter(x => x !== e);          // mastered — out it goes!
+    savePouch();
+    celebrateGraduation(scene);
+  } else {
+    e.gap *= 2;                                  // the spacing in "spaced"
+    e.dueAt = questionsAsked + e.gap;
+    savePouch();
+  }
+}
+
+function celebrateGraduation(scene) {
+  sfx('graduate');
+  // The wizard, teacher of this world, takes notice if he's
+  // around; otherwise the world itself says it.
+  const line = wizardSprite
+    ? 'Wizard: ⭐ That one used to trick you — not anymore. Bravo!'
+    : "⭐ Mastered! That tricky one won't fool you again!";
+  scene.time.delayedCall(1400, () => showMessage(scene, line));
+  for (let i = 0; i < 8; i++) {                  // a quiet ring of stars
+    const a = (i / 8) * Math.PI * 2;
+    const st = scene.add.image(player.x, player.y, 'fx-star')
+      .setDepth(6).setTint(0xffe08a).setScale(0.7);
+    scene.tweens.add({
+      targets: st,
+      x: player.x + Math.cos(a) * 46, y: player.y + Math.sin(a) * 46,
+      alpha: 0, scale: 0.2, duration: 900, ease: 'Cubic.out',
+      onComplete: () => st.destroy(),
+    });
+  }
+}
+
+loadPouch(); // wake yesterday's practice
+
 function newQuestion(quiz, bank = questionBank) {
-  if (bank.length > 0) {
+  questionsAsked++;
+  quiz._source = (bank === wizardBank) ? 'wizard' : 'main';
+  quiz._comeback = false; // (every path below leaves this honest)
+
+  // A pouch question that's due — and isn't the one just asked —
+  // comes back NOW, wearing its little star on the banner.
+  const due = pouch.find(e =>
+    e.source === quiz._source && e.dueAt <= questionsAsked &&
+    e.q !== quiz.question && e.wrongs.length >= 2);
+  if (due) {
+    quiz.question = due.q;
+    quiz.correct = due.a;
+    const w = due.wrongs.slice();
+    quiz.answers = [due.a,
+      w.splice(randInt(0, w.length - 1), 1)[0],
+      w.splice(randInt(0, w.length - 1), 1)[0]];
+    quiz._comeback = true;
+  } else if (bank.length > 0) {
     // ---- A custom question from the bank ----
     let entry;
     do {
@@ -1072,69 +1211,272 @@ const CHALLENGE_STYLE = {
   wizard:  { icon: '🧙', action: 'Answer to heal  (+1 ♥)',     bg: '#163f1ef2', accent: '#9be9a8' },
 };
 
-function setQuestionBanner(text) {
+// ============================================================
+//  THE QUESTION CARD — the banner, painted like the world.
+//
+//  A rounded card with a soft shadow and a glowing accent
+//  border in the challenge's colour, drawn on a canvas the
+//  same way the worlds are painted. And it's polite: twice a
+//  second the game checks whether the player or the challenge
+//  marker would hide behind it — if so, the card glides to the
+//  other edge of the screen (staying above the D-pad on touch
+//  screens). The question is never in the way of its answer.
+// ============================================================
+
+// '#rrggbb' (any longer form is trimmed) -> 'rgba(...)', with an
+// optional brightness lift for gradients.
+function hexA(hex, alpha, lift) {
+  const n = parseInt(String(hex).replace('#', '').slice(0, 6), 16) || 0;
+  const c = v => Math.max(0, Math.min(255, v + (lift || 0)));
+  return `rgba(${c((n >> 16) & 255)},${c((n >> 8) & 255)},${c(n & 255)},${alpha})`;
+}
+
+const BANNER_GLOW = 12; // breathing room for shadow + glow, each side
+
+function paintBannerPanel(w, h, bg, accent) {
+  const key = 'banner-panel';
+  if (uiScene.textures.exists(key)) uiScene.textures.remove(key);
+  const p = BANNER_GLOW;
+  const tex = uiScene.textures.createCanvas(key, w + p * 2, h + p * 2);
+  const ctx = tex.context;
+
+  ctx.save();                                     // the card + its shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.45)';
+  ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
+  const g = ctx.createLinearGradient(0, p, 0, p + h);
+  g.addColorStop(0, hexA(bg, 0.96, 20));          // lit from above,
+  g.addColorStop(1, hexA(bg, 0.96, -8));          // settling darker
+  ctx.fillStyle = g;
+  pathRounded(ctx, p, p, w, h, [14, 14, 14, 14]);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();                                     // the accent, glowing
+  ctx.shadowColor = hexA(accent, 0.8, 0);
+  ctx.shadowBlur = 7;
+  ctx.strokeStyle = hexA(accent, 0.95, 0);
+  ctx.lineWidth = 2;
+  pathRounded(ctx, p + 1, p + 1, w - 2, h - 2, [13, 13, 13, 13]);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)';     // a faint inner sheen
+  ctx.lineWidth = 1;
+  pathRounded(ctx, p + 3.5, p + 3.5, w - 7, h - 7, [11, 11, 11, 11]);
+  ctx.stroke();
+
+  if (uiScene.sys.game.renderer) tex.refresh();
+}
+
+// Renders content onto the card. Pass null to hide it.
+// relayout=true means "same content, new screen size": no pop.
+function renderBanner(opts, relayout) {
   if (!questionBanner) return;
-  questionBanner.setText(text || '');
-  questionBanner.setVisible(!!text);
+  bannerState = opts;
+  if (!opts) { questionBanner.setVisible(false); return; }
+
+  const w = uiScene.scale.width;
+  bannerQuestion.setWordWrapWidth(Math.min(520, w - 40));
+  bannerQuestion.setText(opts.text || '');
+  bannerTitle.setText(opts.title || '');
+  bannerTitle.setColor(opts.accent || '#9fb6d8');
+  bannerTitle.setVisible(!!opts.title);
+
+  const titleH = opts.title ? bannerTitle.height + 3 : 0;
+  const cw = Math.max(220, Math.max(bannerQuestion.width,
+             opts.title ? bannerTitle.width : 0) + 40);
+  const ch = titleH + bannerQuestion.height + 21;
+  opts._h = ch;
+
+  paintBannerPanel(cw, ch, opts.bg || '#232838', opts.accent || '#9fb6d8');
+  const glowCol = parseInt(String(opts.accent || '#9fb6d8')
+                    .replace('#', '').slice(0, 6), 16);
+  cardGlow.setTint(glowCol).setVisible(true)
+          .setPosition(0, ch / 2)
+          .setScale((cw / 32) * 1.25, (ch / 32) * 2.2);
+  bannerPanel.setTexture('banner-panel');
+  bannerPanel.setPosition(0, -BANNER_GLOW);
+  bannerPanel.setVisible(true);
+  bannerTitle.setPosition(0, 10);
+  bannerQuestion.setPosition(0, 10 + titleH);
+
+  questionBanner.setX(w / 2);
+  questionBanner.setY(bannerSlotY(bannerSlot));
+  questionBanner.setVisible(true);
+  if (!relayout) {
+    questionBanner.setScale(0.96); questionBanner.setAlpha(0.8);
+    uiScene.tweens.add({ targets: questionBanner, scale: 1, alpha: 1,
+                         duration: 160, ease: 'Sine.out' });
+    // Teach the link: for a moment, the beam runs from this new
+    // question to the thing it belongs to — even from afar.
+    tetherBoostUntil = uiScene.time.now + 2500;
+  }
+}
+
+// The card's two homes: hugging the top, or resting low —
+// above the D-pad zone on touch screens, above the message
+// line elsewhere.
+function bannerSlotY(slot) {
+  const w = uiScene.scale.width, h = uiScene.scale.height;
+  if (slot === 'top') return w < 430 ? 74 : 10;
+  const bh = (bannerState && bannerState._h) || 60;
+  const s = Phaser.Math.Clamp(Math.min(w, h) / 430, 0.7, 1.15);
+  const reserve = touchButtons.length ? 208 * s : 58;
+  return Math.max(90, h - bh - reserve);
+}
+
+// Twice a second: would the card hide the player, or the thing
+// the question is about? Then it glides to its other home.
+function updateBannerDodge(scene) {
+  if (!questionBanner || !questionBanner.visible || !bannerState) return;
+  if (scene.time.now - bannerDodgeAt < 250) return;
+  bannerDodgeAt = scene.time.now;
+
+  const cam = scene.cameras.main;
+  const w = uiScene.scale.width;
+  const bw = Math.max(220, bannerPanel.width - BANNER_GLOW * 2);
+  const bh = bannerState._h || 60;
+  const spots = [player, challengeMarker].filter(Boolean)
+    .map(o => ({ x: o.x - cam.scrollX, y: o.y - cam.scrollY }));
+
+  const covered = slot => {
+    const y = bannerSlotY(slot);
+    return spots.some(t =>
+      t.x > w / 2 - bw / 2 - 26 && t.x < w / 2 + bw / 2 + 26 &&
+      t.y > y - 26 && t.y < y + bh + 26);
+  };
+
+  const other = bannerSlot === 'top' ? 'bottom' : 'top';
+  if (covered(bannerSlot) && !covered(other)) {
+    bannerSlot = other;
+    uiScene.tweens.add({ targets: questionBanner, y: bannerSlotY(other),
+                         duration: 300, ease: 'Sine.inOut' });
+  }
+}
+
+// The beam: a soft dotted arc in the challenge's colour, flowing
+// FROM the question card TO the marker over its doors / dragons /
+// wizard. It fades in when the player comes near the challenge
+// (and for a moment whenever a new question appears), so the
+// "this question belongs there" link is always taught, never
+// shouted. If the challenge is off-screen, the beam points to
+// the screen edge nearest it — a gentle "it's that way".
+function updateBannerTether(scene) {
+  if (!bannerTether) return;
+  const live = questionBanner && questionBanner.visible && bannerState && challengeMarker;
+  let want = 0;
+  if (live) {
+    const near = Phaser.Math.Distance.Between(
+      player.x, player.y, challengeMarker.x, challengeMarker.baseY) < 180;
+    want = (near || uiScene.time.now < tetherBoostUntil) ? 1 : 0;
+  }
+  tetherAlpha += (want - tetherAlpha) * 0.12;
+  bannerTether.clear();
+  if (!live || tetherAlpha < 0.02) return;
+
+  const cam = scene.cameras.main;
+  const w = uiScene.scale.width, h = uiScene.scale.height;
+
+  // Where the beam lands: just above the marker, clamped so a
+  // far-off challenge still gets its "that way" hint.
+  const tx = Phaser.Math.Clamp(challengeMarker.x - cam.scrollX, 26, w - 26);
+  const ty = Phaser.Math.Clamp(challengeMarker.baseY - cam.scrollY - 34, 26, h - 26);
+
+  // Where it leaves the card: the edge facing the world, at the
+  // point of the card nearest the target.
+  const bw = Math.max(220, bannerPanel.width - BANNER_GLOW * 2);
+  const bh = bannerState._h || 60;
+  const ax = Phaser.Math.Clamp(tx, questionBanner.x - bw / 2 + 26,
+                                   questionBanner.x + bw / 2 - 26);
+  const ay = questionBanner.y + (bannerSlot === 'top' ? bh + 4 : -6);
+
+  // A gentle arc, dots marching card -> challenge.
+  const mx = (ax + tx) / 2, my = (ay + ty) / 2;
+  const nx = -(ty - ay), ny = (tx - ax);
+  const nl = Math.hypot(nx, ny) || 1;
+  const cxp = mx + (nx / nl) * 24, cyp = my + (ny / nl) * 24;
+
+  const col = parseInt(String(bannerState.accent || '#9fb6d8')
+                .replace('#', '').slice(0, 6), 16);
+  const steps = Math.max(5, Math.round(Math.hypot(tx - ax, ty - ay) / 19));
+  const flow = (scene.time.now * 0.0007) % 1;    // an unhurried drift
+  for (let i = 0; i < steps; i++) {
+    const t = (i + flow) / steps;
+    if (t >= 1) continue;
+    const u = 1 - t;
+    const x = u * u * ax + 2 * u * t * cxp + t * t * tx;
+    const y = u * u * ay + 2 * u * t * cyp + t * t * ty;
+    const a = tetherAlpha * (0.20 + 0.40 * t);   // a whisper, warmest at the end
+    bannerTether.fillStyle(col, a * 0.22);       // faint halo
+    bannerTether.fillCircle(x, y, 3.5);
+    bannerTether.fillStyle(col, a);              // small core
+    bannerTether.fillCircle(x, y, 1.5);
+  }
+}
+
+function setQuestionBanner(text) {
+  renderBanner(text ? { text, bg: '#232838', accent: '#9fb6d8' } : null);
 }
 
 // A typed banner: icon + action header on top, the question below.
 function showChallengeBanner(type, question) {
   if (!questionBanner) return;
   const s = CHALLENGE_STYLE[type];
-  questionBanner.setText(`${s.icon} ${s.action}\n${question}`);
-  questionBanner.setBackgroundColor(s.bg);
-  questionBanner.setColor('#ffffff');
-  questionBanner.setVisible(true);
+  const lvl = LEVELS[currentLevelName] || {};
+  const ch = type === 'wizard' ? wizardChallenge
+           : type === 'dragons' ? lvl.dragons : lvl.quiz;
+  const star = (ch && ch._comeback) ? '⭐ ' : '';
+  renderBanner({
+    title: `${s.icon}  ${s.action.toUpperCase()}`,
+    text: `${star}${question}`,
+    bg: s.bg, accent: s.accent,
+  });
 }
 
 // The bobbing marker: the challenge's icon + a downward arrow,
 // hovering just above the thing the question is about.
-function setChallengeMarker(scene, type, px, py) {
-  if (currentMarkerType === type && challengeMarker) {  // same challenge: just reposition
-    challengeMarker.baseY = py;
-    challengeMarker.setPosition(px, py);
-    return;
-  }
+function setChallengeMarker(scene, type, px, py, spots) {
   clearChallengeMarker();
   if (!scene) return;
   const s = CHALLENGE_STYLE[type];
-  const m = scene.add.text(px, py, `${s.icon}\n▼`, {
-    fontFamily: 'Helvetica, Arial', fontSize: '20px', align: 'center',
-    color: s.accent, backgroundColor: '#00000066', padding: { x: 5, y: 2 },
-  }).setOrigin(0.5, 1).setDepth(6);
-  m.baseY = py;
-  scene.tweens.add({ targets: m, y: py - 6, duration: 650, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
-  challengeMarker = m;
+  const col = parseInt(s.accent.replace('#', '').slice(0, 6), 16);
+  // The challenge itself glows in its question's colour — every
+  // door of the trio, every dragon, the wizard himself. The
+  // breathing (see update) shares its heartbeat with the halo
+  // behind the question card: they pulse together, and that
+  // shared rhythm IS the link between question and place.
+  challengeGlows = (spots || [{ x: px, y: py }]).map(p =>
+    scene.add.image(p.x, p.y, 'fx-glow')
+      .setDepth(1.6).setTint(col)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setScale(2.2).setAlpha(0.5));
+  challengeMarker = { x: px, y: py, baseY: py }; // the tether's anchor
   currentMarkerType = type;
 }
 
 function clearChallengeMarker() {
-  if (challengeMarker) { challengeMarker.destroy(); challengeMarker = null; }
+  challengeGlows.forEach(g => g.destroy());
+  challengeGlows = [];
+  challengeMarker = null;
   currentMarkerType = null;
 }
 
 // Hover the marker over a challenge's cluster (middle door, the
 // middle dragon, or the wizard himself).
 function placeChallengeMarker(scene, type, level) {
-  let px, py;
   if (type === 'wizard') {
     if (!wizardSprite) { clearChallengeMarker(); return; }
-    px = wizardSprite.x; py = wizardSprite.y - 20;        // above his hat
-  } else {
-    const ch = type === 'quiz' ? level.quiz : level.dragons;
-    const cells = type === 'quiz' ? (ch && ch.doors) : (ch && ch.positions);
-    if (!cells || !cells.length) { clearChallengeMarker(); return; }
-    const mid = cells[Math.floor(cells.length / 2)];
-    // Both clusters raise their MIDDLE label so long answers
-    // never overlap the side ones — so the marker must climb
-    // above that raised label, not sit on top of it. The
-    // dragons' label is raised higher (44px above their row)
-    // than the quiz doors' (8px), hence the bigger clearance.
-    px = mid.col * TILE + TILE / 2;
-    py = mid.row * TILE - (type === 'quiz' ? 24 : 58);
+    setChallengeMarker(scene, type, wizardSprite.x, wizardSprite.y,
+                       [{ x: wizardSprite.x, y: wizardSprite.y }]);
+    return;
   }
-  setChallengeMarker(scene, type, px, py);
+  const ch = type === 'quiz' ? level.quiz : level.dragons;
+  const cells = type === 'quiz' ? (ch && ch.doors) : (ch && ch.positions);
+  if (!cells || !cells.length) { clearChallengeMarker(); return; }
+  const spots = cells.map(c =>
+    ({ x: c.col * TILE + TILE / 2, y: c.row * TILE + TILE / 2 }));
+  const mid = spots[Math.floor(spots.length / 2)];
+  setChallengeMarker(scene, type, mid.x, mid.y, spots);
 }
 
 // Show the current level's unsolved challenge, if any.
@@ -1161,10 +1503,10 @@ function updateBannerForLevel(level) {
 
 // A solved challenge shows its answer for a moment, then clears.
 function celebrateBanner(scene, challenge) {
-  questionBanner.setText(`✔  ${challenge.question}  →  ${challenge.correct}`);
-  questionBanner.setBackgroundColor('#1e6b2ef2');
-  questionBanner.setColor('#ffffff');
-  questionBanner.setVisible(true);
+  renderBanner({
+    text: `✔  ${challenge.question}  →  ${challenge.correct}`,
+    bg: '#1e5b2a', accent: '#7fe08a',
+  });
   clearChallengeMarker();   // the marker's job is done
   scene.time.delayedCall(3000, () => updateBannerForLevel(LEVELS[currentLevelName]));
 }
@@ -1443,7 +1785,7 @@ function wallCorners(grid, c, r, isWall, rad) {
 const WALL_STYLES = {
   1:  { side: '#3b414b', top: '#68707e', hi: '#828d9c', shadow: 'rgba(0,0,0,0.35)' },        // stone
   4:  { side: '#1b1f25', top: '#383d46', hi: '#4b515c', shadow: 'rgba(0,0,0,0.45)' },        // cave rock
-  12: { side: '#a83a52', top: '#e2607a', hi: '#f093a6', shadow: 'rgba(60,20,40,0.35)',       // coral reef
+  12: { side: '#a3565f', top: '#ef8f86', hi: '#ffd0c2', shadow: 'rgba(70,30,40,0.35)',       // coral reef
         extra: coralBumps },
   18: { side: '#9fbedd', top: '#f6fbff', hi: '#ffffff', shadow: 'rgba(90,130,180,0.30)',     // cloud bank
         extra: cloudPuffs },
@@ -1473,10 +1815,19 @@ function cloudPuffs(ctx, x, y, rng) {
   }
 }
 function coralBumps(ctx, x, y, rng) {
-  ctx.fillStyle = 'rgba(255,190,205,0.7)';
-  for (let i = 0; i < 3; i++) {
+  // A reef is knobbly, not smooth: pale polyp tips and deeper
+  // rosy pores, scattered — this is what says "coral" rather
+  // than "pink brick", with or without the sea's blue veil.
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = 'rgba(255,235,225,0.75)';
     ctx.beginPath();
-    ctx.arc(x + 6 + rng() * 20, y + 5 + rng() * 14, 2 + rng() * 2.5, 0, Math.PI * 2);
+    ctx.arc(x + 5 + rng() * 22, y + 4 + rng() * 15, 1.8 + rng() * 2.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = 'rgba(150,60,75,0.45)';
+    ctx.beginPath();
+    ctx.arc(x + 6 + rng() * 20, y + 6 + rng() * 14, 1.2 + rng() * 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -2106,6 +2457,7 @@ function handleDoorBump(scene, tile) {
     // Right answer! Open that one door, the quiz is done.
     sfx('solve');
     openTile(scene, level, tile.x, tile.y, quiz.becomes);
+    pouchRecordWin(scene, quiz);
     quiz.solved = true;
     clearChallengeMarker();
     showMessage(scene, `Correct! ${quiz.correct}`);
@@ -2116,6 +2468,7 @@ function handleDoorBump(scene, tile) {
     // relabel the doors, and wait for the player to back off.
     sfx('gentle');
     showMessage(scene, `${quiz.answers[idx]}? Not quite... here's a new one!`);
+    pouchRecordMiss(quiz);
     newQuestion(quiz);
     refreshQuizDisplay(quiz);
     quizNeedsRetreat = true;
@@ -2147,6 +2500,7 @@ function handleDragonTouch(scene, level, i, sprite) {
     showMessage(scene, dragons.message || 'The good dragon bows — the way is open!');
     celebrateBanner(scene, dragons);
     sfx('solve');
+    pouchRecordWin(scene, dragons);
     sprite.setTint(0x9effa0); // it glows a friendly green
     dragonLabels[i].destroy();
     // ...and the evil dragons fly away
@@ -2168,7 +2522,9 @@ function handleDragonTouch(scene, level, i, sprite) {
     knockback = { until: scene.time.now + 220, vx: (dx / len) * 350, vy: (dy / len) * 350 };
     dragonHurtUntil = scene.time.now + 1200;
 
-    // New question, new labels (procedural!)
+    // New question, new labels (procedural!) — and the missed
+    // one slips into the practice pouch for later.
+    pouchRecordMiss(dragons);
     newQuestion(dragons);
     refreshDragonDisplay(dragons);
 
@@ -2338,6 +2694,7 @@ function orbTouched(scene, i) {
     state.health = Math.min(MAX_HEALTH, state.health + 1);
     updateHealthLabel();
     effectHeal(scene, player.x, player.y);
+    pouchRecordWin(scene, wizardChallenge);
     if (state.health >= MAX_HEALTH) {
       showMessage(scene, 'Wizard: Fully healed — off you go! (+1 ♥)');
       endWizardSession();
@@ -2351,6 +2708,7 @@ function orbTouched(scene, i) {
   } else {
     sfx('gentle');
     showMessage(scene, `${wizardChallenge.answers[i]}? Hmm, not quite — try this one!`);
+    pouchRecordMiss(wizardChallenge);
     newQuestion(wizardChallenge, wizardBank);
     refreshWizardDisplay();
     wizardNeedsRetreat = true;
@@ -2652,12 +3010,10 @@ function layoutUI(scene) {
   messageText.setPosition(w / 2, h - 36);
   layoutProgress(scene);
 
-  // The question banner: top-center, dropping below the corner
-  // labels on narrow (portrait) screens.
+  // The question card re-fits itself to the new screen shape.
   if (questionBanner) {
-    const narrow = w < 430;
-    questionBanner.setPosition(w / 2, narrow ? 74 : 10);
-    questionBanner.setWordWrapWidth(narrow ? w - 16 : Math.min(520, w - 230));
+    if (bannerState) renderBanner(bannerState, true);
+    else questionBanner.setPosition(w / 2, bannerSlotY(bannerSlot));
   }
   if (waterOverlay) waterOverlay.setSize(w, h);
   if (vignette) vignette.setDisplaySize(w, h);
@@ -2919,6 +3275,12 @@ function sfx(name) {
     case 'bump':         // an "oof" — low and brief, more felt than heard
       tone(174.61, { vol: 0.05, decay: 0.35, wave: 'triangle' });
       break;
+    case 'graduate':     // an old foe finally beaten: a proud flourish
+      tone(523.25,  { vol: 0.05, decay: 0.8 });
+      tone(659.25,  { vol: 0.05, decay: 0.8, at: 0.11 });
+      tone(783.99,  { vol: 0.05, decay: 1.0, at: 0.22, echo: 0.3 });
+      tone(1046.50, { vol: 0.05, decay: 1.8, at: 0.33, echo: 0.4 });
+      break;
   }
 }
 
@@ -3157,6 +3519,19 @@ function effectPearlBubbles(scene, x, y) {
 //  UPDATE — runs ~60 times per second
 // ============================================================
 function update() {
+  updateBannerDodge(this); // the card steps aside for the player
+  updateBannerTether(this); // and points to what it's asking about
+
+  // The heartbeat: the challenge and the question card breathe
+  // together — one rhythm, one colour, one meaning.
+  if (challengeGlows.length) {
+    const pulse = 0.5 + 0.5 * Math.sin(this.time.now * 0.003);
+    const a = 0.28 + 0.42 * pulse, sc = 2.05 + 0.35 * pulse;
+    challengeGlows.forEach(g => g.setAlpha(a).setScale(sc));
+    if (cardGlow && questionBanner && questionBanner.visible)
+      cardGlow.setAlpha(0.07 + 0.13 * pulse);
+  } else if (cardGlow) cardGlow.setAlpha(0);
+
   // The torch stays in the player's hand, breathing slightly.
   if (playerLight) {
     playerLight.x = player.x;
