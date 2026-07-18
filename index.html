@@ -265,12 +265,9 @@ let bannerPanel, bannerTitle, bannerQuestion; // the card's parts
 let bannerState = null;  // what the card currently shows (for re-layout)
 let bannerSlot = 'top';  // which edge the card calls home right now
 let bannerDodgeAt = 0;   // throttle for the get-out-of-the-way check
-let bannerTether = null; // the dotted beam linking card -> challenge
 let cardGlow = null;     // the halo behind the card (breathes with the doors)
-let tetherAlpha = 0;     // how visible the beam currently is
-let tetherBoostUntil = 0;// new question: show the link for a moment
 let gameScene = null;        // set in create(): lets banner helpers reach the scene
-let challengeMarker = null;  // the tether's anchor { x, y, baseY } on the challenge
+let challengeMarker = null;  // the challenge's anchor point (the card dodges around it)
 let challengeGlows = [];     // soft breathing light ON the doors/dragons/wizard
 let currentMarkerType = null;
 // After a wrong answer, the player must stop pushing on the
@@ -343,15 +340,16 @@ function makeTextures(scene) {
   ctx.fillStyle = '#3a3f48'; ctx.fillRect(TILE * 4 + 3, 3, TILE - 6, TILE - 6);
   ctx.fillStyle = '#22262c'; ctx.fillRect(TILE * 4 + 3, TILE - 8, TILE - 6, 5);
 
-  // Tile 5: QUESTION door — quizzes and dragons open it, so its
-  // plaque shows a "?": answers are the key here.
+  // Tile 5: the answer door — quizzes and dragons open it. No
+  // "?" on the wood: the question lives on the card, the answer
+  // on the label above; the door just offers a handle.
   ctx.fillStyle = '#7a4f26'; ctx.fillRect(TILE * 5, 0, TILE, TILE);
   ctx.fillStyle = '#8e5f30';
   ctx.fillRect(TILE * 5 + 3, 2, 7, 28); ctx.fillRect(TILE * 5 + 13, 2, 7, 28); ctx.fillRect(TILE * 5 + 23, 2, 7, 28);
-  ctx.fillStyle = '#5a3c1c'; ctx.fillRect(TILE * 5 + 9, 9, 14, 14);
-  ctx.fillStyle = '#ffe9a8';
-  ctx.font = 'bold 13px Helvetica, Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('?', TILE * 5 + 16, 16.5);
+  ctx.fillStyle = '#33271c';
+  ctx.beginPath(); ctx.arc(TILE * 5 + 24.5, 17, 2.6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#c9a86a';
+  ctx.beginPath(); ctx.arc(TILE * 5 + 24.1, 16.6, 1.2, 0, Math.PI * 2); ctx.fill();
 
   // Tile 6: house wall — cream plaster with timber beams
   let o = TILE * 6;
@@ -784,10 +782,10 @@ function createUI() {
   // The question card: built like a little painting — panel,
   // title, question — grouped so it can glide as one.
   questionBanner = this.add.container(400, 10).setDepth(11);
-  cardGlow = this.add.image(0, 0, 'fx-glow')
-    .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0).setVisible(false);
-  questionBanner.add(cardGlow); // behind the panel: the card's halo
   bannerPanel = this.add.image(0, 0, '__WHITE').setOrigin(0.5, 0).setVisible(false);
+  cardGlow = this.add.image(0, 0, '__WHITE')
+    .setOrigin(0.5, 0).setBlendMode(Phaser.BlendModes.ADD)
+    .setAlpha(0).setVisible(false); // the card's rim, breathing with the doors
   bannerTitle = this.add.text(0, 0, '', {
     fontFamily: "'Trebuchet MS', 'Segoe UI', Helvetica, sans-serif",
     fontSize: '12px', fontStyle: 'bold', align: 'center',
@@ -797,9 +795,8 @@ function createUI() {
     fontSize: '17px', fontStyle: 'bold', color: '#ffffff', align: 'center',
     wordWrap: { width: 520, useAdvancedWrap: true },
   }).setOrigin(0.5, 0).setShadow(0, 2, '#00000088', 3);
-  questionBanner.add([bannerPanel, bannerTitle, bannerQuestion]);
+  questionBanner.add([bannerPanel, cardGlow, bannerTitle, bannerQuestion]);
   questionBanner.setVisible(false);
-  bannerTether = this.add.graphics().setDepth(10.5); // the card's beam
 
   // A translucent blue veil for underwater levels (above the
   // world at depth 5, below the HUD at depth 10+).
@@ -1269,10 +1266,10 @@ function paintBannerPanel(w, h, bg, accent) {
   ctx.fill();
   ctx.restore();
 
-  ctx.save();                                     // the accent, glowing
-  ctx.shadowColor = hexA(accent, 0.8, 0);
-  ctx.shadowBlur = 7;
-  ctx.strokeStyle = hexA(accent, 0.95, 0);
+  ctx.save();                                     // a quiet accent line —
+  ctx.shadowColor = hexA(accent, 0.4, 0);         // the BREATHING rim above
+  ctx.shadowBlur = 3;                             // it carries the light
+  ctx.strokeStyle = hexA(accent, 0.45, 0);
   ctx.lineWidth = 2;
   pathRounded(ctx, p + 1, p + 1, w - 2, h - 2, [13, 13, 13, 13]);
   ctx.stroke();
@@ -1284,6 +1281,25 @@ function paintBannerPanel(w, h, bg, accent) {
   ctx.stroke();
 
   if (uiScene.sys.game.renderer) tex.refresh();
+
+  // The card's RIM: the same breathing edge-light the doors
+  // wear, cut to this card's exact shape. Painted white here,
+  // tinted the challenge's colour when shown.
+  const rkey = 'banner-rim';
+  if (uiScene.textures.exists(rkey)) uiScene.textures.remove(rkey);
+  const rtex = uiScene.textures.createCanvas(rkey, w + p * 2, h + p * 2);
+  const rc = rtex.context;
+  for (const [lw, blur, a] of [[5, 9, 0.30], [3, 5, 0.5], [1.5, 2.5, 0.95]]) {
+    rc.save();
+    rc.shadowColor = 'rgba(255,255,255,' + a + ')';
+    rc.shadowBlur = blur;
+    rc.strokeStyle = 'rgba(255,255,255,' + a + ')';
+    rc.lineWidth = lw;
+    pathRounded(rc, p + 1, p + 1, w - 2, h - 2, [13, 13, 13, 13]);
+    rc.stroke();
+    rc.restore();
+  }
+  if (uiScene.sys.game.renderer) rtex.refresh();
 }
 
 // Renders content onto the card. Pass null to hide it.
@@ -1309,9 +1325,9 @@ function renderBanner(opts, relayout) {
   paintBannerPanel(cw, ch, opts.bg || '#232838', opts.accent || '#9fb6d8');
   const glowCol = parseInt(String(opts.accent || '#9fb6d8')
                     .replace('#', '').slice(0, 6), 16);
+  cardGlow.setTexture('banner-rim');
   cardGlow.setTint(glowCol).setVisible(true)
-          .setPosition(0, ch / 2)
-          .setScale((cw / 32) * 1.25, (ch / 32) * 2.2);
+          .setScale(1).setPosition(0, -BANNER_GLOW);
   bannerPanel.setTexture('banner-panel');
   bannerPanel.setPosition(0, -BANNER_GLOW);
   bannerPanel.setVisible(true);
@@ -1325,9 +1341,6 @@ function renderBanner(opts, relayout) {
     questionBanner.setScale(0.96); questionBanner.setAlpha(0.8);
     uiScene.tweens.add({ targets: questionBanner, scale: 1, alpha: 1,
                          duration: 160, ease: 'Sine.out' });
-    // Teach the link: for a moment, the beam runs from this new
-    // question to the thing it belongs to — even from afar.
-    tetherBoostUntil = uiScene.time.now + 2500;
   }
 }
 
@@ -1372,66 +1385,6 @@ function updateBannerDodge(scene) {
   }
 }
 
-// The beam: a soft dotted arc in the challenge's colour, flowing
-// FROM the question card TO the marker over its doors / dragons /
-// wizard. It fades in when the player comes near the challenge
-// (and for a moment whenever a new question appears), so the
-// "this question belongs there" link is always taught, never
-// shouted. If the challenge is off-screen, the beam points to
-// the screen edge nearest it — a gentle "it's that way".
-function updateBannerTether(scene) {
-  if (!bannerTether) return;
-  const live = questionBanner && questionBanner.visible && bannerState && challengeMarker;
-  let want = 0;
-  if (live) {
-    const near = Phaser.Math.Distance.Between(
-      player.x, player.y, challengeMarker.x, challengeMarker.baseY) < 180;
-    want = (near || uiScene.time.now < tetherBoostUntil) ? 1 : 0;
-  }
-  tetherAlpha += (want - tetherAlpha) * 0.12;
-  bannerTether.clear();
-  if (!live || tetherAlpha < 0.02) return;
-
-  const cam = scene.cameras.main;
-  const w = uiScene.scale.width, h = uiScene.scale.height;
-
-  // Where the beam lands: just above the marker, clamped so a
-  // far-off challenge still gets its "that way" hint.
-  const tx = Phaser.Math.Clamp(challengeMarker.x - cam.scrollX, 26, w - 26);
-  const ty = Phaser.Math.Clamp(challengeMarker.baseY - cam.scrollY - 34, 26, h - 26);
-
-  // Where it leaves the card: the edge facing the world, at the
-  // point of the card nearest the target.
-  const bw = Math.max(220, bannerPanel.width - BANNER_GLOW * 2);
-  const bh = bannerState._h || 60;
-  const ax = Phaser.Math.Clamp(tx, questionBanner.x - bw / 2 + 26,
-                                   questionBanner.x + bw / 2 - 26);
-  const ay = questionBanner.y + (bannerSlot === 'top' ? bh + 4 : -6);
-
-  // A gentle arc, dots marching card -> challenge.
-  const mx = (ax + tx) / 2, my = (ay + ty) / 2;
-  const nx = -(ty - ay), ny = (tx - ax);
-  const nl = Math.hypot(nx, ny) || 1;
-  const cxp = mx + (nx / nl) * 24, cyp = my + (ny / nl) * 24;
-
-  const col = parseInt(String(bannerState.accent || '#9fb6d8')
-                .replace('#', '').slice(0, 6), 16);
-  const steps = Math.max(5, Math.round(Math.hypot(tx - ax, ty - ay) / 19));
-  const flow = (scene.time.now * 0.0007) % 1;    // an unhurried drift
-  for (let i = 0; i < steps; i++) {
-    const t = (i + flow) / steps;
-    if (t >= 1) continue;
-    const u = 1 - t;
-    const x = u * u * ax + 2 * u * t * cxp + t * t * tx;
-    const y = u * u * ay + 2 * u * t * cyp + t * t * ty;
-    const a = tetherAlpha * (0.20 + 0.40 * t);   // a whisper, warmest at the end
-    bannerTether.fillStyle(col, a * 0.22);       // faint halo
-    bannerTether.fillCircle(x, y, 3.5);
-    bannerTether.fillStyle(col, a);              // small core
-    bannerTether.fillCircle(x, y, 1.5);
-  }
-}
-
 function setQuestionBanner(text) {
   renderBanner(text ? { text, bg: '#232838', accent: '#9fb6d8' } : null);
 }
@@ -1468,7 +1421,7 @@ function setChallengeMarker(scene, type, px, py, spots) {
       .setDepth(1.6).setTint(col)
       .setBlendMode(Phaser.BlendModes.ADD)
       .setAlpha(0.4));
-  challengeMarker = { x: px, y: py, baseY: py }; // the tether's anchor
+  challengeMarker = { x: px, y: py, baseY: py }; // the anchor the card avoids covering
   currentMarkerType = type;
 }
 
@@ -3538,7 +3491,6 @@ function effectPearlBubbles(scene, x, y) {
 // ============================================================
 function update() {
   updateBannerDodge(this); // the card steps aside for the player
-  updateBannerTether(this); // and points to what it's asking about
 
   // The heartbeat: the challenge and the question card breathe
   // together — one rhythm, one colour, one meaning.
@@ -3546,8 +3498,11 @@ function update() {
     const pulse = 0.5 + 0.5 * Math.sin(this.time.now * 0.003);
     const a = 0.22 + 0.34 * pulse, sc = 0.98 + 0.07 * pulse;
     challengeGlows.forEach(g => g.setAlpha(a).setScale(sc));
+    // The card takes the SAME breath value — lifted, because its
+    // rim must shine over the card's own edge, while the doors'
+    // rims shine over the muted world.
     if (cardGlow && questionBanner && questionBanner.visible)
-      cardGlow.setAlpha(0.05 + 0.10 * pulse);
+      cardGlow.setAlpha(Math.min(1, a * 1.8));
   } else if (cardGlow) cardGlow.setAlpha(0);
 
   // The torch stays in the player's hand, breathing slightly.

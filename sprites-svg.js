@@ -115,10 +115,8 @@ window.SVG_TILES = {
     </g>
     <rect x="1" y="3.5" width="30" height="2.6" rx="1" fill="#33271c"/>
     <rect x="1" y="25.9" width="30" height="2.6" rx="1" fill="#33271c"/>
-    <rect x="9" y="9" width="14" height="14" rx="2.5" fill="#33271c"/>
-    <text x="16" y="16.6" text-anchor="middle" dominant-baseline="central"
-      font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="bold"
-      fill="#ffe9a8">?</text>
+    <circle cx="24.5" cy="17" r="2.6" fill="#33271c"/>
+    <circle cx="24.1" cy="16.6" r="1.2" fill="#c9a86a"/>
   </svg>`,
 
   // 6 — house wall: plaster with timber framing
